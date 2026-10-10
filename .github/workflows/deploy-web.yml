@@ -5,8 +5,8 @@ on:
     branches:
       - develop
     paths:
-      - 'web/**'
-      - '.github/workflows/deploy-web.yml'
+      - "web/**"
+      - ".github/workflows/deploy-web.yml"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install
@@ -36,7 +36,7 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          # Dev API by default; override with VITE_API_STAGE / VITE_API_BASE if needed.
+          # Dev API by default; override with VITE_API_STAGE / VITE_API_BASE if needed
           VITE_API_STAGE: dev
       - uses: actions/upload-pages-artifact@v3
         with:
