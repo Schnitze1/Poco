@@ -2,7 +2,7 @@
 
 Reversible PII detection and tokenisation for safe use of documents with LLMs.
 
-Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such as `[Email_1]` and `[Name_1]`, send the redacted text to an LLM, then restore the original values. Built as a university DevOps project (SWE40006) with a Rust core, CLI, and AWS Lambda HTTP API.
+Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such as `[Email_1]` and `[Name_1]`, send the redacted text to an LLM, then restore the original values. Built with a Rust core, CLI, and AWS Lambda HTTP API.
 
 ---
 
@@ -33,7 +33,7 @@ cargo run -p pii-cli            # interactive encode/decode
 
 ---
 
-## Architecture (short)
+## Architecture
 
 ```text
 file / paste text
@@ -68,7 +68,7 @@ More detail: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 
 ---
 
-## API (website teammate)
+## API
 
 Base (dev): `https://6xz841x652.execute-api.us-east-1.amazonaws.com/dev`
 
