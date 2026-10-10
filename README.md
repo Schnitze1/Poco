@@ -1,4 +1,4 @@
-# SWE40006 — PII Anonymisation Tool
+# Poco — PII Anonymisation Tool
 
 Reversible PII detection and tokenisation for safe use of documents with LLMs.
 
