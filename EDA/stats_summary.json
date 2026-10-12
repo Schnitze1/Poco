@@ -1,0 +1,506 @@
+{
+  "sample_shape": [
+    50000,
+    19
+  ],
+  "total_corpus_examples": 1636375,
+  "train_examples": 1309912,
+  "validation_examples": 326463,
+  "num_labels": 39,
+  "total_sample_annotations": 373468,
+  "summary_stats": {
+    "count": {
+      "char_length": 50000.0,
+      "word_count": 50000.0,
+      "token_count": 50000.0,
+      "entity_count": 50000.0,
+      "pii_token_count": 50000.0,
+      "pii_token_ratio": 50000.0,
+      "pii_char_length": 50000.0,
+      "pii_char_ratio": 50000.0,
+      "avg_entity_char_len": 50000.0,
+      "unique_entity_types": 50000.0
+    },
+    "mean": {
+      "char_length": 284.70006,
+      "word_count": 40.8707,
+      "token_count": 109.09028,
+      "entity_count": 7.46936,
+      "pii_token_count": 33.98604,
+      "pii_token_ratio": 0.33844803031468423,
+      "pii_char_length": 71.93752,
+      "pii_char_ratio": 0.2940851852751649,
+      "avg_entity_char_len": 9.69859583564461,
+      "unique_entity_types": 6.721
+    },
+    "std": {
+      "char_length": 222.03686266781034,
+      "word_count": 36.659609654899505,
+      "token_count": 78.77684764799939,
+      "entity_count": 4.8145077401636405,
+      "pii_token_count": 22.42128674720494,
+      "pii_token_ratio": 0.11890642581832131,
+      "pii_char_length": 48.68057243102472,
+      "pii_char_ratio": 0.13090078914398584,
+      "avg_entity_char_len": 3.138063121422545,
+      "unique_entity_types": 3.754677210096634
+    },
+    "min": {
+      "char_length": 0.0,
+      "word_count": 0.0,
+      "token_count": 0.0,
+      "entity_count": 0.0,
+      "pii_token_count": 0.0,
+      "pii_token_ratio": 0.0,
+      "pii_char_length": 0.0,
+      "pii_char_ratio": 0.0,
+      "avg_entity_char_len": 0.0,
+      "unique_entity_types": 0.0
+    },
+    "25%": {
+      "char_length": 130.0,
+      "word_count": 16.0,
+      "token_count": 53.0,
+      "entity_count": 4.0,
+      "pii_token_count": 18.0,
+      "pii_token_ratio": 0.2608695652173913,
+      "pii_char_length": 36.0,
+      "pii_char_ratio": 0.19879518072289157,
+      "avg_entity_char_len": 7.8,
+      "unique_entity_types": 4.0
+    },
+    "50%": {
+      "char_length": 210.0,
+      "word_count": 30.0,
+      "token_count": 85.0,
+      "entity_count": 6.0,
+      "pii_token_count": 29.0,
+      "pii_token_ratio": 0.33755274261603374,
+      "pii_char_length": 60.0,
+      "pii_char_ratio": 0.2780487804878049,
+      "avg_entity_char_len": 9.571428571428571,
+      "unique_entity_types": 6.0
+    },
+    "75%": {
+      "char_length": 369.0,
+      "word_count": 55.0,
+      "token_count": 139.0,
+      "entity_count": 10.0,
+      "pii_token_count": 45.0,
+      "pii_token_ratio": 0.4174757281553398,
+      "pii_char_length": 96.0,
+      "pii_char_ratio": 0.3791348600508906,
+      "avg_entity_char_len": 11.456293706293707,
+      "unique_entity_types": 9.0
+    },
+    "max": {
+      "char_length": 1199.0,
+      "word_count": 256.0,
+      "token_count": 808.0,
+      "entity_count": 43.0,
+      "pii_token_count": 186.0,
+      "pii_token_ratio": 1.0,
+      "pii_char_length": 387.0,
+      "pii_char_ratio": 0.9295774647887324,
+      "avg_entity_char_len": 43.0,
+      "unique_entity_types": 20.0
+    },
+    "skew": {
+      "char_length": 1.6066403004597436,
+      "word_count": 1.6270503057068235,
+      "token_count": 1.8432058990409186,
+      "entity_count": 1.3240173010066536,
+      "pii_token_count": 1.3371599830818461,
+      "pii_token_ratio": -0.05159393454765979,
+      "pii_char_length": 1.2435850777377742,
+      "pii_char_ratio": 0.42682062340306326,
+      "avg_entity_char_len": 0.42427482485645807,
+      "unique_entity_types": 0.7932966796589265
+    },
+    "kurtosis": {
+      "char_length": 2.475336501278243,
+      "word_count": 3.0458046183771468,
+      "token_count": 4.72483361849619,
+      "entity_count": 2.4529033519991637,
+      "pii_token_count": 2.3915968410655277,
+      "pii_token_ratio": 0.268073609353757,
+      "pii_char_length": 1.7246544513673263,
+      "pii_char_ratio": -0.08097427804737656,
+      "avg_entity_char_len": 3.214719007355067,
+      "unique_entity_types": 0.3554876908331783
+    }
+  },
+  "missing_stats": {
+    "Missing_Count": {
+      "uid": 0,
+      "language": 0,
+      "region": 0,
+      "script": 0,
+      "source_dataset": 0,
+      "char_length": 0,
+      "word_count": 0,
+      "token_count": 0,
+      "entity_count": 0,
+      "pii_token_count": 0,
+      "pii_token_ratio": 0,
+      "pii_char_length": 0,
+      "pii_char_ratio": 0,
+      "avg_entity_char_len": 0,
+      "max_entity_char_len": 0,
+      "unique_entity_types": 0,
+      "tokens_per_char": 0,
+      "chars_per_word": 0,
+      "has_pii": 0
+    },
+    "Missing_Percentage": {
+      "uid": 0.0,
+      "language": 0.0,
+      "region": 0.0,
+      "script": 0.0,
+      "source_dataset": 0.0,
+      "char_length": 0.0,
+      "word_count": 0.0,
+      "token_count": 0.0,
+      "entity_count": 0.0,
+      "pii_token_count": 0.0,
+      "pii_token_ratio": 0.0,
+      "pii_char_length": 0.0,
+      "pii_char_ratio": 0.0,
+      "avg_entity_char_len": 0.0,
+      "max_entity_char_len": 0.0,
+      "unique_entity_types": 0.0,
+      "tokens_per_char": 0.0,
+      "chars_per_word": 0.0,
+      "has_pii": 0.0
+    }
+  },
+  "outliers_stats": {
+    "char_length": {
+      "Q1": 130.0,
+      "Q3": 369.0,
+      "IQR": 239.0,
+      "Lower_Bound": -228.5,
+      "Upper_Bound": 727.5,
+      "Lower_Outliers": 0,
+      "Upper_Outliers": 3017,
+      "Total_Outliers": 3017,
+      "Outlier_Pct": 6.034
+    },
+    "word_count": {
+      "Q1": 16.0,
+      "Q3": 55.0,
+      "IQR": 39.0,
+      "Lower_Bound": -42.5,
+      "Upper_Bound": 113.5,
+      "Lower_Outliers": 0,
+      "Upper_Outliers": 2937,
+      "Total_Outliers": 2937,
+      "Outlier_Pct": 5.874
+    },
+    "token_count": {
+      "Q1": 53.0,
+      "Q3": 139.0,
+      "IQR": 86.0,
+      "Lower_Bound": -76.0,
+      "Upper_Bound": 268.0,
+      "Lower_Outliers": 0,
+      "Upper_Outliers": 2625,
+      "Total_Outliers": 2625,
+      "Outlier_Pct": 5.25
+    },
+    "entity_count": {
+      "Q1": 4.0,
+      "Q3": 10.0,
+      "IQR": 6.0,
+      "Lower_Bound": -5.0,
+      "Upper_Bound": 19.0,
+      "Lower_Outliers": 0,
+      "Upper_Outliers": 1326,
+      "Total_Outliers": 1326,
+      "Outlier_Pct": 2.6519999999999997
+    },
+    "pii_token_count": {
+      "Q1": 18.0,
+      "Q3": 45.0,
+      "IQR": 27.0,
+      "Lower_Bound": -22.5,
+      "Upper_Bound": 85.5,
+      "Lower_Outliers": 0,
+      "Upper_Outliers": 1798,
+      "Total_Outliers": 1798,
+      "Outlier_Pct": 3.596
+    },
+    "pii_token_ratio": {
+      "Q1": 0.2608695652173913,
+      "Q3": 0.4174757281553398,
+      "IQR": 0.1566061629379485,
+      "Lower_Bound": 0.025960320810468562,
+      "Upper_Bound": 0.6523849725622626,
+      "Lower_Outliers": 638,
+      "Upper_Outliers": 216,
+      "Total_Outliers": 854,
+      "Outlier_Pct": 1.7080000000000002
+    },
+    "pii_char_length": {
+      "Q1": 36.0,
+      "Q3": 96.0,
+      "IQR": 60.0,
+      "Lower_Bound": -54.0,
+      "Upper_Bound": 186.0,
+      "Lower_Outliers": 0,
+      "Upper_Outliers": 1611,
+      "Total_Outliers": 1611,
+      "Outlier_Pct": 3.222
+    },
+    "pii_char_ratio": {
+      "Q1": 0.19879518072289157,
+      "Q3": 0.3791348600508906,
+      "IQR": 0.18033967932799902,
+      "Lower_Bound": -0.07171433826910698,
+      "Upper_Bound": 0.6496443790428892,
+      "Lower_Outliers": 0,
+      "Upper_Outliers": 277,
+      "Total_Outliers": 277,
+      "Outlier_Pct": 0.5539999999999999
+    },
+    "avg_entity_char_len": {
+      "Q1": 7.8,
+      "Q3": 11.456293706293707,
+      "IQR": 3.656293706293707,
+      "Lower_Bound": 2.315559440559439,
+      "Upper_Bound": 16.940734265734267,
+      "Lower_Outliers": 783,
+      "Upper_Outliers": 915,
+      "Total_Outliers": 1698,
+      "Outlier_Pct": 3.396
+    },
+    "unique_entity_types": {
+      "Q1": 4.0,
+      "Q3": 9.0,
+      "IQR": 5.0,
+      "Lower_Bound": -3.5,
+      "Upper_Bound": 16.5,
+      "Lower_Outliers": 0,
+      "Upper_Outliers": 894,
+      "Total_Outliers": 894,
+      "Outlier_Pct": 1.788
+    }
+  },
+  "label_distribution": [
+    {
+      "label": "GIVENNAME",
+      "count": 45897,
+      "percentage": 12.28940632129125
+    },
+    {
+      "label": "DATE",
+      "count": 42952,
+      "percentage": 11.5008514785738
+    },
+    {
+      "label": "SURNAME",
+      "count": 34532,
+      "percentage": 9.246307581907955
+    },
+    {
+      "label": "EMAIL",
+      "count": 26780,
+      "percentage": 7.170627737851704
+    },
+    {
+      "label": "CITY",
+      "count": 24587,
+      "percentage": 6.583428834598948
+    },
+    {
+      "label": "TITLE",
+      "count": 24048,
+      "percentage": 6.439105893945399
+    },
+    {
+      "label": "TELEPHONENUM",
+      "count": 20637,
+      "percentage": 5.525774631293712
+    },
+    {
+      "label": "AGE",
+      "count": 18371,
+      "percentage": 4.919029207321645
+    },
+    {
+      "label": "STREET",
+      "count": 17636,
+      "percentage": 4.722225197339531
+    },
+    {
+      "label": "BUILDINGNUM",
+      "count": 17400,
+      "percentage": 4.659033705699016
+    },
+    {
+      "label": "ZIPCODE",
+      "count": 14892,
+      "percentage": 3.98749022673964
+    },
+    {
+      "label": "IDCARDNUM",
+      "count": 13011,
+      "percentage": 3.4838326175201084
+    },
+    {
+      "label": "CREDITCARDNUMBER",
+      "count": 12848,
+      "percentage": 3.440187646598905
+    },
+    {
+      "label": "TAXNUM",
+      "count": 10042,
+      "percentage": 2.6888515214154896
+    },
+    {
+      "label": "GENDER",
+      "count": 10015,
+      "percentage": 2.681621986354922
+    },
+    {
+      "label": "DRIVERLICENSENUM",
+      "count": 9860,
+      "percentage": 2.640119099896109
+    },
+    {
+      "label": "SEX",
+      "count": 8730,
+      "percentage": 2.3375496695834714
+    },
+    {
+      "label": "SOCIALNUM",
+      "count": 8450,
+      "percentage": 2.262576713399809
+    },
+    {
+      "label": "PASSPORTNUM",
+      "count": 7792,
+      "percentage": 2.086390266368203
+    },
+    {
+      "label": "TIME",
+      "count": 4613,
+      "percentage": 1.2351794531258369
+    },
+    {
+      "label": "AMOUNT",
+      "count": 77,
+      "percentage": 0.020617562950507137
+    },
+    {
+      "label": "ORGANISATION",
+      "count": 74,
+      "percentage": 0.019814281277110754
+    },
+    {
+      "label": "URL",
+      "count": 73,
+      "percentage": 0.019546520719311962
+    },
+    {
+      "label": "COUNTRY",
+      "count": 52,
+      "percentage": 0.013923549005537288
+    },
+    {
+      "label": "CURRENCY",
+      "count": 29,
+      "percentage": 0.007765056176165026
+    },
+    {
+      "label": "BANKNAME",
+      "count": 20,
+      "percentage": 0.00535521115597588
+    },
+    {
+      "label": "ACCOUNTNUM",
+      "count": 7,
+      "percentage": 0.001874323904591558
+    },
+    {
+      "label": "IPV4",
+      "count": 7,
+      "percentage": 0.001874323904591558
+    },
+    {
+      "label": "USERNAME",
+      "count": 7,
+      "percentage": 0.001874323904591558
+    },
+    {
+      "label": "JOBTITLE",
+      "count": 6,
+      "percentage": 0.0016065633467927643
+    },
+    {
+      "label": "TIMEZONE",
+      "count": 4,
+      "percentage": 0.001071042231195176
+    },
+    {
+      "label": "PASSWORD",
+      "count": 4,
+      "percentage": 0.001071042231195176
+    },
+    {
+      "label": "SALARY",
+      "count": 4,
+      "percentage": 0.001071042231195176
+    },
+    {
+      "label": "WEIGHT",
+      "count": 4,
+      "percentage": 0.001071042231195176
+    },
+    {
+      "label": "ALLERGIES",
+      "count": 2,
+      "percentage": 0.000535521115597588
+    },
+    {
+      "label": "MEDICATION",
+      "count": 2,
+      "percentage": 0.000535521115597588
+    },
+    {
+      "label": "DOCTORNAME",
+      "count": 1,
+      "percentage": 0.000267760557798794
+    },
+    {
+      "label": "AIRPORTCODE",
+      "count": 1,
+      "percentage": 0.000267760557798794
+    },
+    {
+      "label": "MACADDRESS",
+      "count": 1,
+      "percentage": 0.000267760557798794
+    }
+  ],
+  "top_languages": {
+    "zh": 6378,
+    "ms": 6316,
+    "ko": 6284,
+    "vi": 6278,
+    "ja": 6269,
+    "tl": 6220,
+    "id": 6204,
+    "en": 6051
+  },
+  "top_regions": {
+    "CN": 6378,
+    "MY": 6316,
+    "KR": 6284,
+    "VN": 6278,
+    "JP": 6269,
+    "PH": 6220,
+    "ID": 6204,
+    "SG": 6051
+  }
+}

@@ -1,0 +1,11 @@
+Document_Position_Range,Recall,Entity_Count,Attention_Degradation
+0-10%,0.9397,812,Mild degradation
+10-20%,0.949,1020,Mild degradation
+20-30%,0.9496,992,Mild degradation
+30-40%,0.9465,991,Mild degradation
+40-50%,0.9324,961,Mild degradation
+50-60%,0.9358,1012,Mild degradation
+60-70%,0.9365,977,Mild degradation
+70-80%,0.9277,941,Mild degradation
+80-90%,0.9208,1035,Mild degradation
+90-100%,0.9368,759,Mild degradation

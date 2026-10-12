@@ -1,0 +1,7 @@
+Length_Bucket,Recall,Entity_Count,Comment
+1-2 chars (<3),0.85,1147,Recall drop under 3 chars
+3-5 chars,0.9329,2041,Stable plateau
+6-10 chars,0.9513,3775,Stable plateau
+11-15 chars,0.9613,1319,Stable plateau
+16-20 chars,0.9581,860,Stable plateau
+>20 chars,0.9609,358,Stable plateau

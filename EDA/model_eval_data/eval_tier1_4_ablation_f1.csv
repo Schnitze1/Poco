@@ -1,0 +1,4 @@
+Architecture,Precision,Recall,F1_Score,Avg_Latency_ms,Design_Role
+Regex-Only (Pass 1),0.982,0.748,0.849,2.8,High precision on formatted patterns; fails on context/names
+NER-Only (Pass 2),0.912,0.925,0.918,195.4,High semantic recall; misses strict alphanumeric/ID checksums
+Poco Hybrid (Two-Pass),0.981,0.972,0.976,198.2,"Pass 1 captures rigid tokens, Pass 2 captures context; optimal synergy"

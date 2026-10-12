@@ -1,0 +1,5 @@
+Pipeline_Stage,Cost_USD_Per_Request,Percentage,Cost_Per_Million_Requests_USD,Infrastructure
+Regex Pass (Pass 1),4e-07,7.77,0.4,"AWS Lambda AL2023 (Rust, ~2ms execution)"
+Transformer NER Pass (Pass 2),3.5e-06,67.96,3.5,"AWS Lambda Container (ONNX Runtime, ~180ms execution)"
+DynamoDB Session Write,1.25e-06,24.27,1.25,DynamoDB On-Demand (1 Write Request Unit per session)
+Total Poco Request,5.15e-06,100.0,5.15,Serverless pay-per-use architecture

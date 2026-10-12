@@ -1,0 +1,5 @@
+Non_PII_Category,FP_Percentage,Primary_Confused_PII,Typical_Examples,Vault_Remedy
+Common Nouns,44.2,GIVENNAME / TITLE,"March, Bill, General, Grace, Haven",User marks as non-PII; session vault whitelists token
+Product Names / Brands,26.5,CITY / SURNAME / ORG,"Apple, Oracle, Amazon, Ford, Phoenix",User reclassifies or de-redacts in one click
+Technical Terms / Acronyms,18.1,IDCARDNUM / TAXNUM,"IPv6, SHA256, UUID, REST, UTF8",Excluded by regex checksum filter
+Alphanumeric Codes,11.2,DRIVERLICENSENUM / ZIPCODE,"XR-7000, SKU-9402, Flight-302",User manual override in web vault

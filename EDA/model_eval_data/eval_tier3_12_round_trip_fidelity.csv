@@ -1,0 +1,4 @@
+Restoration_Outcome,Restored_Count,Percentage,Root_Cause
+100% Exact Bit-for-Bit Restoration,9998,99.98,Deterministic substitution via Poco Rust Vault engine
+LLM Case / Punctuation Modification,2,0.02,External LLM altered token casing (e.g. [name_1] vs [Name_1])
+Corrupted or Missing Tokens,0,0.0,Zero token leakage or lost mapping in session

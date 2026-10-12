@@ -1,0 +1,4 @@
+Boundary_Category,Percentage,Description,Impact
+Exact Match,96.2,Both start token and end token match ground truth perfectly,Clean tokenisation; exact reversal guaranteed
+Partial Overlap,3.1,Span shares tokens with ground truth (e.g. dropped prefix/honorific),Subspan captured; minor residual context
+Complete Miss,0.7,Zero token intersection with annotated span,Targeted by human-in-the-loop Vault review

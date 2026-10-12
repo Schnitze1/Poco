@@ -1,0 +1,44 @@
+Label,Full_Corpus_Count,Percentage,Viability_Tier,Training_Status,Action_Recommendation
+DATE,1398279,11.764260962705059,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+GIVENNAME,1396075,11.745717859961042,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+SURNAME,1200212,10.097846837841493,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+EMAIL,881036,7.412495947902968,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+CITY,824793,6.939301879104523,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+TITLE,770782,6.4848864878580965,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+TELEPHONENUM,660834,5.559851523929226,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+AGE,588562,4.951799290936655,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+STREET,559329,4.705850777998424,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+BUILDINGNUM,549425,4.622524603054345,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+ZIPCODE,506109,4.258090375078003,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+IDCARDNUM,387266,3.2582183426790623,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+CREDITCARDNUMBER,374409,3.150047438876961,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+DRIVERLICENSENUM,328121,2.760608627708595,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+GENDER,319615,2.6890443663925274,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+TAXNUM,308680,2.597043990482441,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+SEX,292600,2.4617567436023142,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+SOCIALNUM,281424,2.3677287416662254,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+PASSPORTNUM,239123,2.0118341004798914,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+TIME,19145,0.1610742749701514,Tier 1: Fully Trainable,Trainable (Supervised NER),Core Target Vocabulary
+ORGANISATION,329,0.0027680039940026022,Tier 2: Marginal / Long-Tail,Marginal (Super-class or Oversample),Group into Super-Class or Drop
+AMOUNT,309,0.0025997362740024436,Tier 2: Marginal / Long-Tail,Marginal (Super-class or Oversample),Group into Super-Class or Drop
+URL,261,0.002195893746002064,Tier 2: Marginal / Long-Tail,Marginal (Super-class or Oversample),Group into Super-Class or Drop
+COUNTRY,213,0.0017920512180016844,Tier 2: Marginal / Long-Tail,Marginal (Super-class or Oversample),Group into Super-Class or Drop
+CURRENCY,100,0.000841338600000791,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+USERNAME,100,0.000841338600000791,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+BANKNAME,78,0.0006562441080006169,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+ACCOUNTNUM,46,0.0003870157560003638,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+JOBTITLE,23,0.0001935078780001819,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+IPV4,19,0.00015985433400015026,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+PASSWORD,18,0.00015144094800014236,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+WEIGHT,12,0.0001009606320000949,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+ALLERGIES,10,8.413386000007909e-05,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+TIMEZONE,10,8.413386000007909e-05,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+SALARY,10,8.413386000007909e-05,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+MEDICATION,4,3.365354400003164e-05,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+HEIGHT,2,1.682677200001582e-05,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+POLICYNUM,2,1.682677200001582e-05,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+AIRPORTCODE,1,8.41338600000791e-06,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+MACADDRESS,1,8.41338600000791e-06,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+JOBTYPE,1,8.41338600000791e-06,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+DOCTORNAME,1,8.41338600000791e-06,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
+HOSPITALNAME,1,8.41338600000791e-06,Tier 3: Unviable (<100 in Corpus),Untrainable (<100 in Full Corpus),Drop from Neural Head; Regex in Poco
