@@ -57,6 +57,7 @@ export function saveWorkspace(state: PersistedState) {
       JSON.stringify({ activeEncode: state.activeEncode, activeVault: state.activeVault })
     )
     if (state.sessionId) window.localStorage.setItem(SESSION_KEY, state.sessionId)
+    else window.localStorage.removeItem(SESSION_KEY)
   } catch {
     /* quota / private mode */
   }

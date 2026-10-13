@@ -13,8 +13,13 @@ target/
 pii-tool/output/
 
 # Node
-web/node_modules/
-web/dist/
+**/node_modules/
+**/dist/
+**/coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
 *.log
 
 # RustRover
