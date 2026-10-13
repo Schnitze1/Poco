@@ -7,6 +7,7 @@ on:
     paths:
       - "web/**"
       - ".github/workflows/deploy-web.yml"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
 
 permissions:
@@ -20,29 +21,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Install
-        run: npm ci
-      - name: Run frontend tests
-        run: npm run test:ci
-      - name: Build
-        run: npm run build
-        env:
-          # Dev API by default; override with VITE_API_STAGE / VITE_API_BASE if needed
-          VITE_API_STAGE: dev
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: web/dist
+    uses: ./.github/workflows/ci.yml
+    with:
+      upload-pages-artifact: true
+      api-stage: dev
 
   deploy:
     needs: build

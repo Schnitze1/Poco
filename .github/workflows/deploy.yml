@@ -12,22 +12,11 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: pii-tool
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: pii-tool
-      - name: Run tests
-        run: cargo test --workspace -- --test-threads=1
+  checks:
+    uses: ./.github/workflows/ci.yml
 
   deploy:
-    needs: test
+    needs: checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

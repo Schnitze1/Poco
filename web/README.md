@@ -19,7 +19,9 @@ npm run build
 
 `npm run test:ci` runs the colocated Vitest tests once using jsdom. `npm test` starts watch mode. The persistence tests cover empty storage, workspace restoration, clearing an old session, and malformed stored JSON.
 
-The frontend test workflow runs on relevant pushes and pull requests. The `deploy-web.yml` Pages workflow also runs tests before building, and its deployment job depends on that build. Production deployment configuration is still part of the CI/CD readiness work.
+The shared `.github/workflows/ci.yml` runs `backend-tests` and `frontend-checks` on implementation-branch pushes and every pull request targeting `develop`, `main`, `test/**`, or `release/**`. PR checks have no path filters, so documentation-only changes still receive both results. Backend tests use in-memory sessions with AWS storage disabled; frontend checks run tests, lint, and a production build. These checks do not verify live AWS behaviour.
+
+Delivery-branch deployment workflows call the same CI before deploying. The `deploy-web.yml` workflow publishes the artifact produced by the validated frontend build. The obsolete `deploy-pages.yml` workflow also requires CI, but its old frontend path still needs consolidation. Production deployment configuration remains part of the CI/CD readiness work. The repository owner must configure required checks separately to enforce PR merge restrictions.
 
 ## API configuration
 
