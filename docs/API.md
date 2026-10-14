@@ -55,6 +55,26 @@ Liveness. No auth, no body.
 
 ---
 
+## `POST /api/v1/extract`
+
+Extract text from an uploaded **.txt / .md / .pdf / .docx** file (base64).
+
+**Request**
+
+```json
+{ "fileName": "report.pdf", "fileBase64": "JVBERi0xLjQK…" }
+```
+
+**200**
+
+```json
+{ "fileName": "report.pdf", "text": "Extracted plain text…" }
+```
+
+**400** missing fields, bad base64, or unsupported/scanned format.
+
+---
+
 ## `POST /api/v1/encode`
 
 Redact PII in free text and store mappings under `sessionId`.
@@ -155,6 +175,43 @@ List all mappings for a session, first-appearance order.
 Empty session → `"mappings": []`.
 
 **400** missing `sessionId` path segment.
+
+---
+
+## `PUT /api/v1/sessions/{sessionId}/mappings`
+
+Insert or replace one mapping (Vault edit / add token).
+
+**Request**
+
+```json
+{ "token": "Email_1", "value": "s.mitchell@university.edu", "category": "Email" }
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `token` | string | yes | Readable token class (`Email_1`, `Custom_2`, …). |
+| `value` | string | yes | Original value to restore on decode (may be empty). |
+| `category` | string | no | Defaults to a class-derived label. |
+
+**200**
+
+```json
+{
+  "sessionId": "3f2c9a1e-…",
+  "mapping": { "token": "Email_1", "value": "s.mitchell@university.edu", "category": "Email" }
+}
+```
+
+**400** missing `sessionId` or `token`.
+
+---
+
+## `DELETE /api/v1/sessions/{sessionId}/mappings/{token}`
+
+Remove one mapping. Idempotent.
+
+**204** no body. After this, that token decodes as a hallucination.
 
 ---
 
