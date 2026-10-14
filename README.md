@@ -11,6 +11,7 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | Path | What it is |
 |---|---|
 | `pii-tool/` | Cargo workspace (core engine, CLI, Lambda handler) |
+| `web/` | React/TypeScript frontend with API integration and persistence tests |
 | `pii-tool/crates/core` | `pii-core` — extract, detect, encode/decode (gold-tested) |
 | `pii-tool/crates/cli` | Interactive CLI (`cargo run -p pii-cli`) |
 | `pii-tool/crates/lambda` | `poco-lambda` — AWS Lambda HTTP API |
@@ -18,6 +19,7 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | `docs/API.md` | HTTP API contract for the website client |
 | `docs/ENVIRONMENTS.md` | dev / test / staging / prod deploy map |
 | `.github/workflows/deploy.yml` | CI: tests → AL2023 Lambda build → deploy → smoke |
+| `.github/workflows/ci.yml` | Shared backend tests and frontend tests/lint/build |
 
 ---
 
@@ -47,7 +49,7 @@ file / paste text
 
 - Detection is **rules-based** (gaze-pii + `poc_extra.toml`), not a neural NER.
 - Tokens are reversible; mappings must never be written to disk in the Lambda.
-- HTTP API is **paste-text only** in v1 — extract files on the client or CLI first.
+- The website extracts TXT/MD/PDF in the browser and uses the API for DOCX extraction. The backend also supports uploaded file bytes and S3 keys.
 
 ---
 
@@ -56,11 +58,15 @@ file / paste text
 | Trigger | Environment | Lambda | API stage |
 |---|---|---|---|
 | push `develop` | dev | `poco-pii-api-handler-dev` | `/dev` |
-| push `test/**` | test | `poco-pii-api-handler-test` | `/test` |
+| push `test/qa` | test | `poco-pii-api-handler-test` | `/test` |
 | push `release/**` | staging | `poco-pii-api-handler-staging` | `/staging` |
 | push `main` | prod | `poco-pii-api-handler` | `/prod` |
 
 **Do not push `main` until production is deliberately ready.**
+
+The workflow builds and verifies the Lambda package before entering the deployment environment. On `main`, the production frontend is published only after the Lambda deployment and environment health check succeed. Other branches do not publish Pages. Deployment runs are serialized per target, including all release branches sharing staging.
+
+The owner must configure required CI checks and reviewers for the `production` and `github-pages` environments before merging production routing. Workflow environment references alone do not enforce approval.
 
 AWS Academy Learner Lab constraints: `us-east-1` only, `LabRole` only (no custom IAM/OIDC), static credentials in GitHub secrets (refresh ~every 4 hours).
 
@@ -72,11 +78,11 @@ More detail: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 
 Base (dev): `https://6xz841x652.execute-api.us-east-1.amazonaws.com/dev`
 
-| Method | Path | Status |
+| Method | Path | Implemented behaviour |
 |---|---|---|
-| GET | `/health` | Ready |
-| POST | `/encode` | Ready — `{ "text": "..." }` → redacted + mappings |
-| POST | `/decode` | **501** — needs DynamoDB sessions |
+| GET | `/health` | Liveness and environment identity |
+| POST | `/encode` | `{ "text": "..." }` → session ID, redacted text and mappings |
+| POST | `/decode` | `{ "sessionId": "...", "text": "..." }` → restored text and unknown tokens |
 
 Full contract: [`docs/API.md`](docs/API.md).
 
@@ -84,9 +90,9 @@ Full contract: [`docs/API.md`](docs/API.md).
 
 ## Session / persistence (current)
 
-Encode creates a **new vault per request**. Nothing is stored server-side yet.  
-DynamoDB `pii-sessions-*` tables exist; wiring them is the next backend task.  
-Until then the frontend should keep `mappings` in `localStorage` if it needs to survive a refresh.
+Encode creates a **new vault per request** and writes mappings under a session ID. With `DYNAMODB_TABLE` configured, encode/decode and vault edits use DynamoDB; without it, sessions use process memory. The frontend also stores its workspace and session ID in browser local storage.
+
+`S3_BUCKET` enables optional upload/redacted-text storage. Redacted-text archiving is best effort, so encode success alone does not prove an S3 write succeeded. Verify the live resources and encode/decode flow for each environment before the demonstration.
 
 ---
 

@@ -19,9 +19,11 @@ npm run build
 
 `npm run test:ci` runs the colocated Vitest tests once using jsdom. `npm test` starts watch mode. The persistence tests cover empty storage, workspace restoration, clearing an old session, and malformed stored JSON.
 
-The shared `.github/workflows/ci.yml` runs `backend-tests` and `frontend-checks` on implementation-branch pushes and every pull request targeting `develop`, `main`, `test/**`, or `release/**`. PR checks have no path filters, so documentation-only changes still receive both results. Backend tests use in-memory sessions with AWS storage disabled; frontend checks run tests, lint, and a production build. These checks do not verify live AWS behaviour.
+The shared `.github/workflows/ci.yml` runs `backend-tests` and `frontend-checks` on implementation-branch pushes and every pull request targeting `develop`, `main`, `test/qa`, or `release/**`. PR checks have no path filters, so documentation-only changes still receive both results. Backend tests use in-memory sessions with AWS storage disabled; frontend checks run tests, lint, and a production build. These checks do not verify live AWS behaviour.
 
-Delivery-branch deployment workflows call the same CI before deploying. The `deploy-web.yml` workflow publishes the artifact produced by the validated frontend build. The obsolete `deploy-pages.yml` workflow also requires CI, but its old frontend path still needs consolidation. Production deployment configuration remains part of the CI/CD readiness work. The repository owner must configure required checks separately to enforce PR merge restrictions.
+The `Deploy` workflow calls the same CI before packaging and deploying Lambda. On `main`, CI builds the frontend with `VITE_API_STAGE=prod` and uploads a Pages artifact. After the production Lambda update and health check succeed, the `publish-web` job in `deploy.yml` publishes that validated artifact through the `github-pages` environment. Dev, test, and staging deployments do not publish the website. The `littlepoco.me` domain remains configured in GitHub Pages settings; Actions-based publishing does not require a CNAME file.
+
+The repository owner must configure required PR checks and the `production` and `github-pages` environment reviewers before merging production routing. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for the deployment map and owner setup. Referencing an environment in a workflow does not configure its approval rules.
 
 ## API configuration
 

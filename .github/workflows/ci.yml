@@ -6,13 +6,13 @@ on:
     branches-ignore:
       - develop
       - main
-      - 'test/**'
+      - test/qa
       - 'release/**'
   pull_request:
     branches:
       - develop
       - main
-      - 'test/**'
+      - test/qa
       - 'release/**'
   workflow_dispatch:
   workflow_call:
@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   backend-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: pii-tool
@@ -49,7 +49,7 @@ jobs:
         run: cargo test --locked --workspace -- --test-threads=1
 
   frontend-checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
