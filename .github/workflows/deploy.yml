@@ -4,81 +4,144 @@ on:
   push:
     branches:
       - develop
-      - 'test/**'
+      - test/qa
       - 'release/**'
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  # All release branches share staging; serialize the entire deployment flow.
+  group: deploy-${{ startsWith(github.ref, 'refs/heads/release/') && 'staging' || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: pii-tool
+  target:
+    runs-on: ubuntu-24.04
+    outputs:
+      stage: ${{ steps.target.outputs.stage }}
+      environment: ${{ steps.target.outputs.environment }}
+      lambda: ${{ steps.target.outputs.lambda }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: pii-tool
-      - name: Run tests
-        run: cargo test --workspace -- --test-threads=1
-
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Determine environment
-        id: env
+      - name: Resolve deployment target
+        id: target
         run: |
-          REF="${{ github.ref }}"
-          if [[ "$REF" == "refs/heads/develop" ]]; then
-            echo "name=dev" >> $GITHUB_OUTPUT
-            echo "lambda=poco-pii-api-handler-dev" >> $GITHUB_OUTPUT
-          elif [[ "$REF" == refs/heads/test/* ]]; then
-            echo "name=test" >> $GITHUB_OUTPUT
-            echo "lambda=poco-pii-api-handler-test" >> $GITHUB_OUTPUT
-          elif [[ "$REF" == refs/heads/release/* ]]; then
-            echo "name=staging" >> $GITHUB_OUTPUT
-            echo "lambda=poco-pii-api-handler-staging" >> $GITHUB_OUTPUT
-          else
-            echo "Unknown branch: $REF"
-            exit 1
-          fi
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/heads/develop)
+              stage='dev'
+              environment='dev'
+              lambda='poco-pii-api-handler-dev'
+              ;;
+            refs/heads/test/qa)
+              stage='test'
+              environment='test'
+              lambda='poco-pii-api-handler-test'
+              ;;
+            refs/heads/release/*)
+              stage='staging'
+              environment='staging'
+              lambda='poco-pii-api-handler-staging'
+              ;;
+            refs/heads/main)
+              stage='prod'
+              environment='production'
+              lambda='poco-pii-api-handler'
+              ;;
+            *)
+              echo "Unsupported deployment ref: $GITHUB_REF" >&2
+              exit 1
+              ;;
+          esac
+          printf 'stage=%s\nenvironment=%s\nlambda=%s\n' \
+            "$stage" "$environment" "$lambda" >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: target
+    uses: ./.github/workflows/ci.yml
+    with:
+      api-stage: ${{ needs.target.outputs.stage }}
+      upload-pages-artifact: ${{ needs.target.outputs.stage == 'prod' }}
+
+  package:
+    needs: checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Build Lambda in Amazon Linux 2023 container (glibc 2.34)
         run: |
           set -euo pipefail
-          # Drop any stale artifacts (rust-cache / prior steps).
-          find pii-tool/target -name 'bootstrap.zip' -type f -delete 2>/dev/null || true
-          find pii-tool/target -name 'bootstrap' -type f -delete 2>/dev/null || true
-          docker run --rm \
+          docker run --rm -i \
             -v "$PWD":/work \
             -w /work/pii-tool \
             amazonlinux:2023 \
-            bash /work/pii-tool/crates/lambda/build_lambda.sh
+            bash -s <<'BUILD'
+          set -euo pipefail
+          dnf install -y gcc gcc-c++ make zip unzip openssl-devel git cmake pkgconf perl ca-certificates findutils tar patchelf file
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          source "$HOME/.cargo/env"
+
+          cc -c crates/lambda/glibc_compat.c -o /tmp/glibc_compat.o
+          RUSTFLAGS='-C link-arg=/tmp/glibc_compat.o' cargo build --locked --release -p poco-lambda
+
+          PACKAGE_OUT=target/lambda/poco-lambda
+          rm -rf "$PACKAGE_OUT"
+          mkdir -p "$PACKAGE_OUT"
+          cp target/release/poco-lambda "$PACKAGE_OUT/bootstrap"
+          chmod +x "$PACKAGE_OUT/bootstrap"
+          for symbol in __isoc23_strtoll __isoc23_strtol __isoc23_strtoull __isoc23_strtoul; do
+            patchelf --clear-symbol-version "$symbol" "$PACKAGE_OUT/bootstrap" || true
+          done
+          file "$PACKAGE_OUT/bootstrap"
+          ldd "$PACKAGE_OUT/bootstrap" || true
+          (cd "$PACKAGE_OUT" && zip -q bootstrap.zip bootstrap)
+          unzip -l "$PACKAGE_OUT/bootstrap.zip"
+          test -f "$PACKAGE_OUT/bootstrap.zip"
+          BUILD
 
       - name: Verify artifact
         run: |
           set -euo pipefail
           ZIP="pii-tool/target/lambda/poco-lambda/bootstrap.zip"
-          echo "ZIP=$ZIP"
           ls -la "$ZIP"
           unzip -l "$ZIP"
-          TMP=$(mktemp -d)
-          unzip -q -o "$ZIP" -d "$TMP"
-          echo "=== binary in zip ==="
-          file "$TMP/bootstrap"
-          if objdump -T "$TMP/bootstrap" | grep -q GLIBC_2.38; then
-            echo "ERROR: zip binary still requires GLIBC_2.38"
-            objdump -T "$TMP/bootstrap" | grep GLIBC_2.38
+          PACKAGE_DIR=$(mktemp -d)
+          unzip -q -o "$ZIP" -d "$PACKAGE_DIR"
+          test -x "$PACKAGE_DIR/bootstrap"
+          file "$PACKAGE_DIR/bootstrap"
+          objdump -T "$PACKAGE_DIR/bootstrap" > "$PACKAGE_DIR/symbols.txt"
+          if grep -q GLIBC_2.38 "$PACKAGE_DIR/symbols.txt"; then
+            echo "ERROR: zip binary requires GLIBC_2.38"
             exit 1
           fi
           echo "OK: no GLIBC_2.38 requirement"
+
+      - name: Upload verified Lambda package
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-bootstrap
+          path: pii-tool/target/lambda/poco-lambda/bootstrap.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    needs: [target, package]
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ needs.target.outputs.environment }}
+      url: https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ needs.target.outputs.stage }}/health
+    env:
+      TARGET_LAMBDA: ${{ needs.target.outputs.lambda }}
+      API_STAGE: ${{ needs.target.outputs.stage }}
+    steps:
+      - name: Download verified Lambda package
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-bootstrap
+          path: artifact
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -91,44 +154,53 @@ jobs:
       - name: Deploy to Lambda
         run: |
           set -euo pipefail
-          echo "=== caller identity ==="
-          aws sts get-caller-identity || true
-          ZIP="pii-tool/target/lambda/poco-lambda/bootstrap.zip"
-          echo "ZIP=$ZIP"
-          if [ ! -f "$ZIP" ]; then
-            echo "ERROR: bootstrap.zip not found at $ZIP"
-            find pii-tool/target -type f | head -50
-            exit 1
-          fi
-          ls -la "$ZIP"
-          SIZE=$(stat -c%s "$ZIP")
-          echo "zip size bytes: $SIZE"
+          ZIP="artifact/bootstrap.zip"
+          test -f "$ZIP"
           aws sts get-caller-identity
           aws lambda update-function-code \
-            --function-name ${{ steps.env.outputs.lambda }} \
-            --zip-file fileb://$ZIP \
+            --function-name "$TARGET_LAMBDA" \
+            --zip-file "fileb://$ZIP" \
             --region us-east-1
           aws lambda wait function-updated \
-            --function-name ${{ steps.env.outputs.lambda }} \
+            --function-name "$TARGET_LAMBDA" \
             --region us-east-1
           aws lambda get-function-configuration \
-            --function-name ${{ steps.env.outputs.lambda }} \
+            --function-name "$TARGET_LAMBDA" \
             --region us-east-1 \
             --query '{Runtime:Runtime,Handler:Handler,Arch:Architectures,LastUpdateStatus:LastUpdateStatus}' \
             --output json
 
-      - name: Smoke test
+      - name: Smoke test environment
         run: |
-          URL="https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ steps.env.outputs.name }}/health"
-          for i in 1 2 3; do
-            STATUS=$(curl -s -o /tmp/health_body -w "%{http_code}" "$URL" || true)
-            echo "Attempt $i: HTTP $STATUS"
-            echo "body: $(cat /tmp/health_body 2>/dev/null || true)"
-            if [ "$STATUS" = "200" ]; then
-              echo "✓ Smoke test passed"
+          set -euo pipefail
+          URL="https://6xz841x652.execute-api.us-east-1.amazonaws.com/$API_STAGE/health"
+          BODY=$(mktemp)
+          for attempt in 1 2 3; do
+            STATUS=$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+              --output "$BODY" --write-out "%{http_code}" "$URL" || true)
+            echo "Attempt $attempt: HTTP $STATUS"
+            cat "$BODY"
+            if [[ "$STATUS" == "200" ]] && \
+              jq -e --arg stage "$API_STAGE" '.status == "ok" and .env == $stage' "$BODY" >/dev/null; then
+              echo "Smoke test passed for $API_STAGE"
               exit 0
             fi
             sleep 5
           done
-          echo "✗ Smoke test failed"
+          echo "Smoke test failed for $API_STAGE"
           exit 1
+
+  publish-web:
+    needs: [target, checks, deploy]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
