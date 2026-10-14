@@ -2,12 +2,9 @@ name: CI
 
 on:
   push:
-    # Deployment workflows call this CI on delivery branches.
+    # A develop push starts the delivery workflow, which calls this CI.
     branches-ignore:
       - develop
-      - main
-      - test/qa
-      - 'release/**'
   pull_request:
     branches:
       - develop
@@ -67,7 +64,15 @@ jobs:
       - name: Lint frontend
         run: npm run lint
       - name: Build frontend
-        run: npm run build
+        run: |
+          npm run build
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs'
+          writeFileSync('dist/deployment.json', JSON.stringify({
+            commit: process.env.GITHUB_SHA,
+            stage: process.env.VITE_API_STAGE,
+          }))
+          NODE
         env:
           VITE_API_STAGE: ${{ inputs.api-stage || 'dev' }}
       - name: Upload validated Pages artifact

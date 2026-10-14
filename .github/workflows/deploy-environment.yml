@@ -1,0 +1,75 @@
+name: Deploy and verify environment
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      lambda:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-and-verify:
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ inputs.environment }}
+      url: https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ inputs.stage }}/health
+    env:
+      TARGET_LAMBDA: ${{ inputs.lambda }}
+      API_STAGE: ${{ inputs.stage }}
+      API_BASE: https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ inputs.stage }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lambda-bootstrap
+          path: artifact
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Deploy the shared Lambda package and verify configuration
+        run: |
+          set -euo pipefail
+          ZIP='artifact/bootstrap.zip'
+          test -f "$ZIP"
+          EXPECTED_HASH=$(openssl dgst -sha256 -binary "$ZIP" | openssl base64 -A)
+          aws lambda update-function-code --function-name "$TARGET_LAMBDA" \
+            --zip-file "fileb://$ZIP" --query '{CodeSha256:CodeSha256,LastUpdateStatus:LastUpdateStatus}'
+          aws lambda wait function-updated --function-name "$TARGET_LAMBDA"
+          CONFIG=$(aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" \
+            --query '{hash:CodeSha256,status:LastUpdateStatus,stage:Environment.Variables.ENVIRONMENT,table:Environment.Variables.DYNAMODB_TABLE,bucket:Environment.Variables.S3_BUCKET}' \
+            --output json)
+          jq -e --arg hash "$EXPECTED_HASH" --arg stage "$API_STAGE" '
+            .hash == $hash and .status == "Successful" and .stage == $stage and
+            (.table | type == "string" and length > 0) and
+            (.bucket | type == "string" and length > 0)
+          ' <<< "$CONFIG" >/dev/null
+
+      - name: Wait for API health and verify environment identity
+        run: |
+          set -euo pipefail
+          BODY=$(mktemp)
+          for attempt in 1 2 3; do
+            STATUS=$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+              --output "$BODY" --write-out '%{http_code}' "$API_BASE/health" || true)
+            if [[ "$STATUS" == 200 ]] && \
+              jq -e --arg stage "$API_STAGE" '.status == "ok" and .env == $stage' "$BODY" >/dev/null; then
+              echo "Health passed for $API_STAGE"
+              exit 0
+            fi
+            echo "Attempt $attempt: HTTP $STATUS"
+            sleep 5
+          done
+          echo "Health failed for $API_STAGE" >&2
+          exit 1

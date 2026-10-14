@@ -2,71 +2,77 @@ name: Deploy
 
 on:
   push:
-    branches:
-      - develop
-      - test/qa
-      - 'release/**'
-      - main
+    branches: [develop]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# One shared chain owns all four environments. Never interrupt an active release.
 concurrency:
-  # All release branches share staging; serialize the entire deployment flow.
-  group: deploy-${{ startsWith(github.ref, 'refs/heads/release/') && 'staging' || github.ref_name }}
+  group: poco-delivery
   cancel-in-progress: false
 
 jobs:
-  target:
+  source:
     runs-on: ubuntu-24.04
-    outputs:
-      stage: ${{ steps.target.outputs.stage }}
-      environment: ${{ steps.target.outputs.environment }}
-      lambda: ${{ steps.target.outputs.lambda }}
     steps:
-      - name: Resolve deployment target
-        id: target
+      - name: Require the development integration branch
         run: |
-          set -euo pipefail
-          case "$GITHUB_REF" in
-            refs/heads/develop)
-              stage='dev'
-              environment='dev'
-              lambda='poco-pii-api-handler-dev'
-              ;;
-            refs/heads/test/qa)
-              stage='test'
-              environment='test'
-              lambda='poco-pii-api-handler-test'
-              ;;
-            refs/heads/release/*)
-              stage='staging'
-              environment='staging'
-              lambda='poco-pii-api-handler-staging'
-              ;;
-            refs/heads/main)
-              stage='prod'
-              environment='production'
-              lambda='poco-pii-api-handler'
-              ;;
-            *)
-              echo "Unsupported deployment ref: $GITHUB_REF" >&2
-              exit 1
-              ;;
-          esac
-          printf 'stage=%s\nenvironment=%s\nlambda=%s\n' \
-            "$stage" "$environment" "$lambda" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" != refs/heads/develop ]]; then
+            echo 'Run delivery from develop.' >&2
+            exit 1
+          fi
 
   checks:
-    needs: target
+    needs: source
     uses: ./.github/workflows/ci.yml
     with:
-      api-stage: ${{ needs.target.outputs.stage }}
-      upload-pages-artifact: ${{ needs.target.outputs.stage == 'prod' }}
+      api-stage: prod
+      upload-pages-artifact: true
+
+  preflight:
+    needs: checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - name: Verify four isolated environments before deployment
+        run: |
+          set -euo pipefail
+          CONFIG_DIR=$(mktemp -d)
+          for stage in dev test staging prod; do
+            lambda="poco-pii-api-handler-$stage"
+            if [[ "$stage" == prod ]]; then lambda='poco-pii-api-handler'; fi
+            aws lambda get-function-configuration --function-name "$lambda" \
+              --query '{runtime:Runtime,arch:Architectures,stage:Environment.Variables.ENVIRONMENT,table:Environment.Variables.DYNAMODB_TABLE,bucket:Environment.Variables.S3_BUCKET}' \
+              --output json > "$CONFIG_DIR/$stage.json"
+            jq -e --arg stage "$stage" '
+              .runtime == "provided.al2023" and .arch == ["x86_64"] and
+              .stage == $stage and
+              (.table | type == "string" and length > 0) and
+              (.bucket | type == "string" and length > 0)
+            ' "$CONFIG_DIR/$stage.json" >/dev/null
+            ROUTED_LAMBDA=$(aws apigateway get-stage --rest-api-id 6xz841x652 \
+              --stage-name "$stage" --query variables.lambdaName --output text)
+            [[ "$ROUTED_LAMBDA" == "$lambda" ]] || {
+              echo "API stage $stage must target $lambda" >&2
+              exit 1
+            }
+            echo "Verified runtime, storage configuration and routing for $stage"
+          done
+          # Sharing a table or bucket would let a test affect another environment.
+          jq -s -e '
+            ([.[].table] | unique | length) == 4 and
+            ([.[].bucket] | unique | length) == 4
+          ' "$CONFIG_DIR"/*.json >/dev/null
 
   package:
-    needs: checks
+    needs: [checks, preflight]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -127,72 +133,44 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  deploy:
-    needs: [target, package]
-    runs-on: ubuntu-24.04
-    environment:
-      name: ${{ needs.target.outputs.environment }}
-      url: https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ needs.target.outputs.stage }}/health
-    env:
-      TARGET_LAMBDA: ${{ needs.target.outputs.lambda }}
-      API_STAGE: ${{ needs.target.outputs.stage }}
-    steps:
-      - name: Download verified Lambda package
-        uses: actions/download-artifact@v4
-        with:
-          name: lambda-bootstrap
-          path: artifact
+  development:
+    needs: package
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      stage: dev
+      environment: dev
+      lambda: poco-pii-api-handler-dev
+    secrets: inherit
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
+  testing:
+    needs: development
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      stage: test
+      environment: testing
+      lambda: poco-pii-api-handler-test
+    secrets: inherit
 
-      - name: Deploy to Lambda
-        run: |
-          set -euo pipefail
-          ZIP="artifact/bootstrap.zip"
-          test -f "$ZIP"
-          aws sts get-caller-identity
-          aws lambda update-function-code \
-            --function-name "$TARGET_LAMBDA" \
-            --zip-file "fileb://$ZIP" \
-            --region us-east-1
-          aws lambda wait function-updated \
-            --function-name "$TARGET_LAMBDA" \
-            --region us-east-1
-          aws lambda get-function-configuration \
-            --function-name "$TARGET_LAMBDA" \
-            --region us-east-1 \
-            --query '{Runtime:Runtime,Handler:Handler,Arch:Architectures,LastUpdateStatus:LastUpdateStatus}' \
-            --output json
+  staging:
+    needs: testing
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      stage: staging
+      environment: staging
+      lambda: poco-pii-api-handler-staging
+    secrets: inherit
 
-      - name: Smoke test environment
-        run: |
-          set -euo pipefail
-          URL="https://6xz841x652.execute-api.us-east-1.amazonaws.com/$API_STAGE/health"
-          BODY=$(mktemp)
-          for attempt in 1 2 3; do
-            STATUS=$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
-              --output "$BODY" --write-out "%{http_code}" "$URL" || true)
-            echo "Attempt $attempt: HTTP $STATUS"
-            cat "$BODY"
-            if [[ "$STATUS" == "200" ]] && \
-              jq -e --arg stage "$API_STAGE" '.status == "ok" and .env == $stage' "$BODY" >/dev/null; then
-              echo "Smoke test passed for $API_STAGE"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Smoke test failed for $API_STAGE"
-          exit 1
+  production:
+    needs: staging
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      stage: prod
+      environment: production
+      lambda: poco-pii-api-handler
+    secrets: inherit
 
   publish-web:
-    needs: [target, checks, deploy]
-    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: production
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -201,6 +179,37 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page-url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  verify-site:
+    needs: publish-web
+    runs-on: ubuntu-24.04
+    env:
+      SITE_URL: ${{ needs.publish-web.outputs.page-url }}
+      EXPECTED_COMMIT: ${{ github.sha }}
+    steps:
+      - name: Verify published website and commit metadata
+        run: |
+          set -euo pipefail
+          test -n "$SITE_URL"
+          BODY=$(mktemp)
+          for attempt in {1..12}; do
+            STATUS=$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+              --header 'Cache-Control: no-cache' --output "$BODY" --write-out '%{http_code}' \
+              "${SITE_URL%/}/deployment.json?commit=$EXPECTED_COMMIT" || true)
+            if [[ "$STATUS" == 200 ]] && \
+              jq -e --arg commit "$EXPECTED_COMMIT" '.commit == $commit and .stage == "prod"' "$BODY" >/dev/null; then
+              curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+                --output /dev/null "$SITE_URL"
+              echo 'Published website is reachable and release metadata matches.'
+              exit 0
+            fi
+            echo "Attempt $attempt: waiting for published release metadata (HTTP $STATUS)"
+            sleep 10
+          done
+          echo 'Published website verification failed.' >&2
+          exit 1
