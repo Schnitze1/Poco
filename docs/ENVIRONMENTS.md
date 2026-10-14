@@ -36,9 +36,9 @@ CI and deployment jobs use Ubuntu 24.04 runners; the Lambda release binary is bu
 
 Deployment workflow concurrency prevents overlapping runs for the same target. All `release/**` branches share the staging concurrency group. Active deployment runs are not canceled by a newer push. GitHub may replace a pending run with a newer pending run; concurrency is not a promise to deploy every queued commit.
 
-## Owner setup before production promotion
+## Owner setup for production approvals
 
-Configure these GitHub environments in repository **Settings → Environments**:
+To include an enforced release approval stage, configure these GitHub environments in repository **Settings → Environments**:
 
 | Environment | Allowed deployment branches | Review requirement |
 |---|---|---|
@@ -50,9 +50,9 @@ Configure these GitHub environments in repository **Settings → Environments**:
 
 The backend and Pages jobs enter different environments, so production may involve two approvals. The verified Lambda package is available before the backend approval job starts.
 
-Referencing an environment in YAML does not configure required reviewers. GitHub can create an unconfigured environment when a workflow first references it. The owner must set reviewers and branch policies before the production workflow is merged and used.
+Referencing an environment in YAML does not configure required reviewers. GitHub can create an unconfigured environment when a workflow first references it. For an enforced approval stage, the owner must set reviewers and branch policies before promoting the release to `main`.
 
-Protect delivery branches with PR review and the shared CI results. Select the actual `backend-tests` and `frontend-checks` check names shown on a PR; do not require the removed `Frontend Tests` workflow. PR validation has no path filters, so documentation-only changes also receive these results.
+Branch protections are optional for this project. The team reviews PRs and waits for `backend-tests` and `frontend-checks` to pass before merging manually; GitHub does not enforce merge restrictions without protection rules. Deployment jobs still require successful CI. PR validation has no path filters, so documentation-only changes also receive both results. If the team later enables required checks, select the actual check names shown on a PR rather than the removed `Frontend Tests` workflow.
 
 See GitHub's [environment setup](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) and [concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 

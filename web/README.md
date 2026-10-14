@@ -23,7 +23,7 @@ The shared `.github/workflows/ci.yml` runs `backend-tests` and `frontend-checks`
 
 The `Deploy` workflow calls the same CI before packaging and deploying Lambda. On `main`, CI builds the frontend with `VITE_API_STAGE=prod` and uploads a Pages artifact. After the production Lambda update and health check succeed, the `publish-web` job in `deploy.yml` publishes that validated artifact through the `github-pages` environment. Dev, test, and staging deployments do not publish the website. The `littlepoco.me` domain remains configured in GitHub Pages settings; Actions-based publishing does not require a CNAME file.
 
-The repository owner must configure required PR checks and the `production` and `github-pages` environment reviewers before merging production routing. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for the deployment map and owner setup. Referencing an environment in a workflow does not configure its approval rules.
+Branch protections are optional; the team reviews PRs and waits for CI manually before merging. The repository owner must configure the `production` and `github-pages` environment reviewers before production promotion if an enforced release approval stage is required. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for the deployment map and owner setup. Referencing an environment in a workflow does not configure its approval rules.
 
 ## API configuration
 

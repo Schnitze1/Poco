@@ -66,7 +66,7 @@ file / paste text
 
 The workflow builds and verifies the Lambda package before entering the deployment environment. On `main`, the production frontend is published only after the Lambda deployment and environment health check succeed. Other branches do not publish Pages. Deployment runs are serialized per target, including all release branches sharing staging.
 
-The owner must configure required CI checks and reviewers for the `production` and `github-pages` environments before merging production routing. Workflow environment references alone do not enforce approval.
+Branch protections are optional for this project; the team reviews PRs and waits for CI manually before merging. The owner must configure reviewers for the `production` and `github-pages` environments before production promotion if an enforced release approval stage is required. Workflow environment references alone do not enforce approval.
 
 AWS Academy Learner Lab constraints: `us-east-1` only, `LabRole` only (no custom IAM/OIDC), static credentials in GitHub secrets (refresh ~every 4 hours).
 
