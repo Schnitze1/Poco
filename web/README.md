@@ -19,11 +19,15 @@ npm run build
 
 `npm run test:ci` runs the colocated Vitest tests once using jsdom. `npm test` starts watch mode. The persistence tests cover empty storage, workspace restoration, clearing an old session, and malformed stored JSON.
 
-The shared `.github/workflows/ci.yml` runs `backend-tests` and `frontend-checks` on implementation-branch pushes and every pull request targeting `develop`, `main`, `test/qa`, or `release/**`. PR checks have no path filters, so documentation-only changes still receive both results. Backend tests use in-memory sessions with AWS storage disabled; frontend checks run tests, lint, and a production build. These checks do not verify live AWS behaviour.
+The shared `.github/workflows/ci.yml` runs locked Rust tests plus frontend tests, lint and build on implementation-branch pushes and pull requests. These checks use in-memory backend storage and do not prove live AWS behaviour.
 
-The `Deploy` workflow calls the same CI before packaging and deploying Lambda. On `main`, CI builds the frontend with `VITE_API_STAGE=prod` and uploads a Pages artifact. After the production Lambda update and health check succeed, the `publish-web` job in `deploy.yml` publishes that validated artifact through the `github-pages` environment. Dev, test, and staging deployments do not publish the website. The `littlepoco.me` domain remains configured in GitHub Pages settings; Actions-based publishing does not require a CNAME file.
+Merging into `develop` starts automatic delivery through Development, Testing, Staging and Production. The workflow builds one Lambda ZIP and reuses it across all environments. Each deployment must pass package/configuration and API health checks before the next environment starts. Pipeline commands stay inside YAML workflows.
 
-Branch protections are optional; the team reviews PRs and waits for CI manually before merging. The repository owner must configure the `production` and `github-pages` environment reviewers before production promotion if an enforced release approval stage is required. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for the deployment map and owner setup. Referencing an environment in a workflow does not configure its approval rules.
+CI prepares the production Pages artifact with `VITE_API_STAGE=prod` and commit metadata. After the production backend health check passes, the workflow publishes that artifact and checks the public website is reachable and its release metadata matches the workflow commit.
+
+There are currently no automated deployed API/storage integration or browser end-to-end acceptance tests. The project specification requires these before production deployment, so replacement tests are still needed. Unit tests and health checks alone do not verify the complete user flow or actual DynamoDB/S3 writes.
+
+Branch protections are optional. For uninterrupted deployment, configure `dev`, `testing`, `staging`, `production` and `github-pages` to allow `develop` without required reviewers. The Pages custom domain is configured in GitHub settings. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for prerequisites and monitoring requirements.
 
 ## API configuration
 
