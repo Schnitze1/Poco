@@ -27,7 +27,7 @@ CI prepares the production Pages artifact with `VITE_API_STAGE=prod` and commit 
 
 There are currently no automated deployed API/storage integration or browser end-to-end acceptance tests. The project specification requires these before production deployment, so replacement tests are still needed. Unit tests and health checks alone do not verify the complete user flow or actual DynamoDB/S3 writes.
 
-Branch protections are optional. For uninterrupted deployment, configure `dev`, `testing`, `staging`, `production` and `github-pages` to allow `develop` without required reviewers. The Pages custom domain is configured in GitHub settings. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for prerequisites and monitoring requirements.
+Branch protections are optional. Missing GitHub environments are created automatically without reviewers or environment secrets; the workflow uses repository AWS secrets. Existing restrictions on `dev`, `testing`, `staging`, `production` and `github-pages` must allow `develop` without approval pauses. Only changing those restrictions requires owner/admin settings access. The Pages custom domain is configured in GitHub settings. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for prerequisites and monitoring requirements.
 
 ## API configuration
 

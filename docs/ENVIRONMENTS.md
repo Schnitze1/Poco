@@ -24,7 +24,7 @@ The four runtimes need separate Lambda functions, DynamoDB tables and S3 buckets
 The delivery workflow is `.github/workflows/deploy.yml`. It triggers on pushes to `develop`, including PR merges, and supports manual dispatch from `develop` only.
 
 1. Validate the source branch and call shared CI: locked Rust workspace tests, frontend unit tests, lint, TypeScript and production build. Save the production Pages artifact with commit metadata.
-2. Check all four Lambda runtime/storage configurations, API stage variables and distinct table/bucket names before changing code.
+2. Call the shared read-only `test-aws.yml` workflow. Check all four Lambda runtime/role/storage configurations, API stage variables, distinct table/bucket names, actual DynamoDB table schemas/TTL and S3 bucket access/region before changing code.
 3. Build Lambda once in `amazonlinux:2023`, validate its executable/glibc compatibility and save `bootstrap.zip` as an artifact.
 4. Deploy that ZIP to Development, then Testing, then Staging, then Production. Each stage calls the shared `deploy-environment.yml` and waits for the previous stage to pass.
 5. At each stage, check the deployed Lambda package hash and configuration, then verify `/health` returns HTTP 200, `status: ok` and the expected environment identity.
@@ -37,21 +37,33 @@ Failed CI, environment configuration or health checks prevent subsequent deploym
 
 One concurrency group serializes the entire delivery chain, so runs cannot overwrite another run's Testing/Staging environments. Active runs are not canceled by newer pushes. GitHub may replace a pending run with a newer pending run, so not every queued commit is guaranteed a deployment.
 
-## One-time owner setup
+## Setup before the first deployment
 
 Complete these before merging the automatic workflow into `develop`; that merge triggers production delivery.
 
-- Create/configure `dev`, `testing`, `staging`, `production` and `github-pages` in **Settings → Environments**. Allow deployment from `develop` in all five. Remove required reviewers and other waiting rules for uninterrupted automatic delivery.
+- The workflow references GitHub environments `dev`, `testing`, `staging`, `production` and `github-pages`. GitHub automatically creates missing environments without reviewers or environment secrets, so you do not need settings access to create them manually. Existing restrictions must allow `develop` without approval pauses. Only changing restrictions or adding environment-specific secrets requires the owner/admin.
 - Keep Pages **Source: GitHub Actions**, the existing custom domain and DNS. Its environment's branch policy must allow `develop`; a `main`-only policy blocks this pipeline.
 - Store valid `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` as repository secrets. Environment secrets can override them for environment jobs; preflight uses repository credentials. All must reach the same intended Learner Lab account.
 - Verify four Lambda functions use runtime `provided.al2023`, handler `bootstrap`, architecture `x86_64` and the existing `LabRole`. Set `ENVIRONMENT` to `dev`, `test`, `staging` or `prod`, and provide nonempty `DYNAMODB_TABLE` and `S3_BUCKET`. Verify timeout/memory suit encode/decode; the prior setup used 512 MB / 30 seconds.
-- Verify DynamoDB keys `sessionId` (partition) and `token` (sort), plus TTL on `expiresAt`. Enable each Lambda to access its own table/bucket. The deployment runner needs Lambda/API Gateway configuration reads and Lambda code updates. Storage configuration checks do not read or write actual DynamoDB items or S3 objects.
+- Verify DynamoDB string keys `sessionId` (partition) and `token` (sort), plus enabled TTL on `expiresAt`. Enable each Lambda to access its own table/bucket. The deployment runner needs Lambda/API Gateway configuration reads, DynamoDB table/TTL descriptions, S3 bucket access checks and Lambda code updates. Readiness checks describe storage resources but do not read or write application items/objects or prove the Lambda role can use them.
 - Verify API Gateway stage integrations, Lambda invocation permissions and CORS for local development and the public site. Direct S3 browser uploads also need appropriate bucket CORS.
 - Set up production monitoring as described below and confirm real data appears.
 
 Branch protections remain optional: review PRs and check CI manually before merging. This setup does not require another person's review or prevent you from merging your own PR. GitHub does not allow authors to submit a formal approving review on their own PR; reviewing the changes and merging is the team's sign-off. Deployment jobs still depend on passing CI, even without branch protection. For environment configuration see [GitHub's environment documentation](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) and [GitHub's PR approval rules](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews).
 
 Learner Lab credentials expire. Renew them before the run; this workflow cannot renew the university lab session. A deployment run is automatic while valid credentials and resource permissions remain available. Expired credentials are a setup failure, not evidence that the pipeline has completed successfully.
+
+## Read-only readiness checkpoint
+
+Run the existing `test-aws.yml` workflow from the feature branch before creating or merging the deployment PR:
+
+```sh
+gh workflow run test-aws.yml --repo Schnitze1/Poco --ref feature/cicd-readiness
+```
+
+This uses repository credentials and requires no GitHub environment settings access. It reads AWS identity, Lambda configuration, API stage targets, table schemas/TTL and bucket access/regions. It requires four different tables and buckets and writes a resource summary to the Actions run summary. It does not deploy, provision resources or change application data. The deployment workflow calls the same checks before packaging.
+
+If it fails, fix the specific AWS configuration or permission reported and rerun this checkpoint. A passing readiness check verifies resource configuration and runner access; it does not replace live encode/decode, persistence or end-to-end acceptance tests.
 
 ## Assignment coverage and remaining evidence
 

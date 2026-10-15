@@ -1,11 +1,17 @@
-name: Test AWS Authentication
+name: Check AWS environments
 
 on:
   workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
-  test-auth:
-    runs-on: ubuntu-latest
+  check-environments:
+    runs-on: ubuntu-24.04
+    env:
+      CONFIG_DIR: ${{ github.workspace }}/aws-environment-config
     steps:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -13,10 +19,96 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: us-east-1
 
       - name: Verify caller identity
         run: aws sts get-caller-identity
 
-      - name: List S3 buckets (sanity check)
-        run: aws s3 ls
+      - name: Check Lambda configuration and API routing
+        run: |
+          set -euo pipefail
+          mkdir -p "$CONFIG_DIR"
+          {
+            echo '## AWS environment readiness'
+            echo 'Read-only configuration checks; no deployment or application data writes.'
+            echo ''
+            echo '| Stage | Lambda | DynamoDB table | S3 bucket |'
+            echo '|---|---|---|---|'
+          } >> "$GITHUB_STEP_SUMMARY"
+          for stage in dev test staging prod; do
+            lambda="poco-pii-api-handler-$stage"
+            if [[ "$stage" == prod ]]; then lambda='poco-pii-api-handler'; fi
+            aws lambda get-function-configuration --function-name "$lambda" \
+              --query '{lambda:FunctionName,runtime:Runtime,handler:Handler,arch:Architectures,state:State,role:Role,stage:Environment.Variables.ENVIRONMENT,table:Environment.Variables.DYNAMODB_TABLE,bucket:Environment.Variables.S3_BUCKET}' \
+              --output json > "$CONFIG_DIR/$stage.json"
+            jq -r --arg stage "$stage" \
+              '"| \($stage) | \(.lambda) | \(.table) | \(.bucket) |"' \
+              "$CONFIG_DIR/$stage.json" | tee -a "$GITHUB_STEP_SUMMARY"
+            if ! jq -e --arg stage "$stage" '
+              .runtime == "provided.al2023" and .handler == "bootstrap" and
+              .arch == ["x86_64"] and .state == "Active" and
+              (.role | endswith("/LabRole")) and .stage == $stage and
+              (.table | type == "string" and length > 0) and
+              (.bucket | type == "string" and length > 0)
+            ' "$CONFIG_DIR/$stage.json" >/dev/null; then
+              echo "ERROR: Invalid Lambda runtime, role, environment or storage configuration for $stage" >&2
+              exit 1
+            fi
+            ROUTED_LAMBDA=$(aws apigateway get-stage --rest-api-id 6xz841x652 \
+              --stage-name "$stage" --query variables.lambdaName --output text)
+            if [[ "$ROUTED_LAMBDA" != "$lambda" ]]; then
+              echo "ERROR: API stage $stage must target $lambda (currently $ROUTED_LAMBDA)" >&2
+              exit 1
+            fi
+          done
+
+      - name: Require separate storage for all four environments
+        run: |
+          set -euo pipefail
+          if ! jq -s -e '
+            length == 4 and
+            ([.[].table] | unique | length) == 4 and
+            ([.[].bucket] | unique | length) == 4
+          ' "$CONFIG_DIR"/*.json >/dev/null; then
+            echo 'ERROR: Development, Testing, Staging and Production must use different tables and buckets.' >&2
+            exit 1
+          fi
+          echo 'All four environments use distinct tables and buckets.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify DynamoDB tables, TTL and S3 buckets
+        run: |
+          set -euo pipefail
+          for stage in dev test staging prod; do
+            table=$(jq -r .table "$CONFIG_DIR/$stage.json")
+            bucket=$(jq -r .bucket "$CONFIG_DIR/$stage.json")
+            echo "Checking $stage storage: $table / $bucket"
+            aws dynamodb describe-table --table-name "$table" \
+              --query '{status:Table.TableStatus,keys:Table.KeySchema,attributes:Table.AttributeDefinitions}' \
+              --output json > "$CONFIG_DIR/$stage-table.json"
+            if ! jq -e '
+              .status == "ACTIVE" and
+              (.keys | sort_by(.KeyType)) == [
+                {"AttributeName":"sessionId","KeyType":"HASH"},
+                {"AttributeName":"token","KeyType":"RANGE"}
+              ] and
+              ([.attributes[] | select(.AttributeName == "sessionId" or .AttributeName == "token")]
+                | length == 2 and all(.AttributeType == "S"))
+            ' "$CONFIG_DIR/$stage-table.json" >/dev/null; then
+              echo "ERROR: $table must be ACTIVE with string keys sessionId (HASH) and token (RANGE)." >&2
+              exit 1
+            fi
+            aws dynamodb describe-time-to-live --table-name "$table" --output json \
+              > "$CONFIG_DIR/$stage-ttl.json"
+            if ! jq -e '.TimeToLiveDescription |
+              .TimeToLiveStatus == "ENABLED" and .AttributeName == "expiresAt"' \
+              "$CONFIG_DIR/$stage-ttl.json" >/dev/null; then
+              echo "ERROR: Enable TTL on expiresAt for $table." >&2
+              exit 1
+            fi
+            BUCKET_REGION=$(aws s3api head-bucket --bucket "$bucket" --query BucketRegion --output text)
+            if [[ "$BUCKET_REGION" != us-east-1 ]]; then
+              echo "ERROR: $bucket must be in us-east-1 (currently $BUCKET_REGION)." >&2
+              exit 1
+            fi
+            echo "- $stage: table/schema/TTL and bucket access/region passed." >> "$GITHUB_STEP_SUMMARY"
+          done

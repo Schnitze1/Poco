@@ -21,6 +21,7 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | `.github/workflows/deploy.yml` | Automatic delivery from develop through all environments |
 | `.github/workflows/ci.yml` | Shared backend tests and frontend tests/lint/build |
 | `.github/workflows/deploy-environment.yml` | Shared Lambda deployment, package/configuration checks and health checks |
+| `.github/workflows/test-aws.yml` | Read-only AWS readiness checks, also called before deployment |
 
 ---
 
@@ -80,7 +81,7 @@ Every environment must pass package/configuration and API health checks before t
 
 `develop` is the deployment source. The new workflow does not deploy independently from `test/qa`, `release/**` or `main`, and automatic delivery does not merge code into those branches. Branches retaining older workflows still have their previous behaviour. Branch protections remain optional; the team reviews PRs before merging into `develop`.
 
-Complete the cloud and GitHub environment setup before merging this workflow into `develop`: that merge will start automatic delivery to production. All deployment environments, including `github-pages`, must allow `develop` without required reviewers. The production website uses the existing Pages custom domain `littlepoco.me`.
+Complete the cloud setup and verify any existing GitHub environment restrictions before merging this workflow into `develop`: that merge will start automatic delivery to production. Missing GitHub environments are created automatically when referenced; manual environment setup is optional. All deployment environments, including `github-pages`, must allow `develop` without required reviewers. The production website uses the existing Pages custom domain `littlepoco.me`.
 
 AWS Academy Learner Lab uses `us-east-1`, the existing `LabRole`, and temporary credentials in GitHub secrets. Credentials must be valid for the entire run and renewed when they expire.
 
