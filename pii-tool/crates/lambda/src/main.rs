@@ -1,6 +1,7 @@
 //! AWS Lambda HTTP handler for pii-core (local code only — deploy is CI's job).
 mod session;
 mod storage;
+mod manual;
 
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
 use serde::Serialize;
@@ -358,7 +359,7 @@ pub async fn route(method: &str, path: &str, body: &str) -> Response<String> {
                 return json_response(500, b);
             }
         };
-        let encoded = match vault.encode(&text) {
+        let mut encoded = match vault.encode(&text) {
             Ok(e) => e,
             Err(e) => {
                 let msg = format!("{e:?}");
@@ -366,6 +367,15 @@ pub async fn route(method: &str, path: &str, body: &str) -> Response<String> {
                 return json_response(500, b);
             }
         };
+        if let Some(raw) = parsed.get("manualMappings") {
+            let rules: Vec<manual::ManualMapping> = match serde_json::from_value(raw.clone()) {
+                Ok(rules) => rules,
+                Err(_) => return json_response(400, err_body("invalid manualMappings")),
+            };
+            if let Err(e) = manual::apply(&mut encoded, &text, &rules) {
+                return json_response(400, err_body(&e));
+            }
+        }
         if let Err(e) = store_mappings(&session_id, &encoded.mappings).await {
             let b = err_body(&e);
             return json_response(500, b);
@@ -617,6 +627,35 @@ mod tests {
         let body = resp.body();
         assert!(body.contains("\"status\":\"ok\""));
         assert!(body.contains("\"version\""));
+    }
+
+    #[tokio::test]
+    async fn manual_redactions_survive_encode_and_decode() {
+        let input = json!({
+            "sessionId": "manual-redaction-roundtrip",
+            "text": "Contact alice@example.com cobaltwidget",
+            "manualMappings": [{"token": "Custom_1", "value": "cobaltwidget"}]
+        });
+        for _ in 0..2 {
+            let response = route("POST", "/encode", &input.to_string()).await;
+            assert_eq!(response.status().as_u16(), 200, "{}", response.body());
+            let encoded: serde_json::Value = serde_json::from_str(response.body()).unwrap();
+            assert_eq!(encoded["redactedText"], "Contact [Email_1] [Custom_1]");
+            let decoded = route("POST", "/decode", &json!({
+                "sessionId": "manual-redaction-roundtrip", "text": encoded["redactedText"]
+            }).to_string()).await;
+            assert_eq!(decoded.status().as_u16(), 200);
+            let restored: serde_json::Value = serde_json::from_str(decoded.body()).unwrap();
+            assert_eq!(restored["restoredText"], input["text"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_manual_redactions_are_rejected() {
+        let response = route("POST", "/encode", &json!({
+            "text": "cobaltwidget", "manualMappings": [{"token": "Custom_1", "value": ""}]
+        }).to_string()).await;
+        assert_eq!(response.status().as_u16(), 400);
     }
 
     #[tokio::test]
