@@ -17,7 +17,6 @@ import { loadWorkspace, saveWorkspace, loadSession, saveSession } from './persis
 import type { DocTab } from './types'
 import { DocumentTabs } from './components/DocumentTabs'
 import { Vault } from './components/Vault'
-import { WordPicker } from './components/WordPicker'
 import './App.css'
 
 type Page = 'Encode' | 'Decode' | 'Vault'
@@ -365,7 +364,7 @@ function App() {
   }
 
   const descriptions = {
-    Encode: 'Replace sensitive information with tokens. Click a word in the input to draft a token.',
+    Encode: 'Replace sensitive information with tokens. Select text and choose Inspect PII to draft a token.',
     Decode: 'Restore tokens using the server session vault.',
     Vault: 'Inspect and edit mappings for the active document.',
   }
@@ -499,21 +498,10 @@ function App() {
                       />
                     </div>
                   </div>
-                  <div className="input-stack">
-                    {encoding && (
-                      <WordPicker
-                        value={input}
-                        placeholder="Hover a word and click it to draft a token…"
-                        onPick={(word) => {
-                          if (word.length >= 2) addTokenFromWord(word)
-                          else setNotice('Pick a longer word to tokenize.')
-                        }}
-                      />
-                    )}
+                  <div>
                     <textarea
                       id="source-input"
                       ref={inputRef}
-                      className={encoding ? 'input-under' : undefined}
                       value={input}
                       onChange={(e) => {
                         updateDocument(
@@ -524,7 +512,7 @@ function App() {
                       }}
                       placeholder={
                         encoding
-                          ? 'Type here — hover a word above and click it to draft a token…'
+                          ? 'Type or paste text here, or upload a file…'
                           : 'Paste text with tokens here or upload a file…'
                       }
                       spellCheck={false}

@@ -246,7 +246,11 @@ jobs:
             })
             await page.goto('http://127.0.0.1:4173')
             await page.waitForFunction(stage => document.querySelector('.demo-note')?.textContent.includes(`API ${stage} ·`), process.env.API_STAGE)
-            await page.getByLabel('Input', { exact: true }).fill(source)
+            const input = page.getByLabel('Input', { exact: true })
+            // Use real pointer/keyboard input: fill() alone misses overlays blocking users.
+            await input.click()
+            await input.pressSequentially(source)
+            assert.equal(await input.inputValue(), source)
             const [encoded] = await Promise.all([
               page.waitForResponse(response => response.url() === `${api}/encode` && response.request().method() === 'POST'),
               page.getByRole('button', { name: 'Encode', exact: true }).click(),
