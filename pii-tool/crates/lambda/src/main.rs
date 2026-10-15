@@ -31,7 +31,7 @@ fn cors() -> [(&'static str, &'static str); 3] {
     [
         ("Access-Control-Allow-Origin", "*"),
         ("Access-Control-Allow-Headers", "Content-Type,Authorization"),
-        ("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS"),
+        ("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS"),
     ]
 }
 
@@ -592,6 +592,23 @@ async fn main() -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn vault_cors_allows_browser_mutations() {
+        for (method, path, body) in [
+            ("OPTIONS", "/sessions/cors-check/mappings", ""),
+            ("PUT", "/sessions/cors-check/mappings", "{}"),
+        ] {
+            let response = route(method, path, body).await;
+            let allowed = response.headers()["access-control-allow-methods"]
+                .to_str()
+                .unwrap();
+            for verb in ["GET", "POST", "PUT", "DELETE", "OPTIONS"] {
+                assert!(allowed.split(',').any(|value| value == verb), "missing {verb}");
+            }
+            assert_eq!(response.headers()["access-control-allow-origin"], "*");
+        }
+    }
 
     #[tokio::test]
     async fn health_ok() {

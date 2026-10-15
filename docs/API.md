@@ -250,7 +250,7 @@ Non-2xx responses:
 API Gateway must allow:
 
 * `Origin`: your CloudFront/site origin (and `http://localhost:*` for dev)
-* `Methods`: `GET`, `POST`, `DELETE`, `OPTIONS`
+* `Methods`: `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`
 * `Headers`: `Content-Type`
 * `Access-Control-Allow-Origin` echoed as appropriate (lab: `*` is acceptable if cookies are unused)
 
