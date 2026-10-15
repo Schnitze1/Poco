@@ -20,8 +20,8 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | `docs/ENVIRONMENTS.md` | Environment setup, automatic delivery and demo checklist |
 | `.github/workflows/deploy.yml` | Automatic delivery from develop through all environments |
 | `.github/workflows/ci.yml` | Shared backend tests and frontend tests/lint/build |
-| `.github/workflows/deploy-environment.yml` | Shared Lambda deployment, package/configuration checks and health checks |
-| `.github/workflows/test-aws.yml` | AWS readiness, Testing/Staging API tests and Production monitoring setup |
+| `.github/workflows/deploy-environment.yml` | Shared Lambda deployment, health and Testing/Staging acceptance checks |
+| `.github/workflows/test-aws.yml` | Read-only AWS readiness checks before delivery |
 
 ---
 
@@ -89,7 +89,7 @@ AWS Academy Learner Lab uses `us-east-1`, the existing `LabRole`, and temporary 
 
 Live API/storage integration and browser acceptance run in Testing and Staging. Browser tests exercise Encode → Vault → refresh → Decode and the unknown-token warning, with screenshots and traces retained as evidence.
 
-Production monitoring uses Lambda Insights and the `Poco-Production` CloudWatch dashboard. The existing AWS workflow can configure it before merging; delivery verifies it again before website publication.
+Production monitoring uses Lambda Insights and the `Poco-Production` CloudWatch dashboard. A dedicated monitoring job configures and verifies it after Production deployment and before website publication.
 
 Setup, monitoring requirements and recording steps: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 

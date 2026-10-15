@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   source:
+    name: Source branch
     runs-on: ubuntu-24.04
     steps:
       - name: Require the development integration branch
@@ -25,6 +26,7 @@ jobs:
           fi
 
   checks:
+    name: CI
     needs: source
     uses: ./.github/workflows/ci.yml
     with:
@@ -32,11 +34,13 @@ jobs:
       upload-pages-artifact: true
 
   preflight:
+    name: AWS readiness
     needs: checks
     uses: ./.github/workflows/test-aws.yml
     secrets: inherit
 
   package:
+    name: Build Lambda
     needs: [checks, preflight]
     runs-on: ubuntu-24.04
     steps:
@@ -99,6 +103,7 @@ jobs:
           retention-days: 7
 
   development:
+    name: Development
     needs: package
     uses: ./.github/workflows/deploy-environment.yml
     with:
@@ -108,6 +113,7 @@ jobs:
     secrets: inherit
 
   testing:
+    name: Testing
     needs: development
     uses: ./.github/workflows/deploy-environment.yml
     with:
@@ -117,6 +123,7 @@ jobs:
     secrets: inherit
 
   staging:
+    name: Staging
     needs: testing
     uses: ./.github/workflows/deploy-environment.yml
     with:
@@ -126,6 +133,7 @@ jobs:
     secrets: inherit
 
   production:
+    name: Production
     needs: staging
     uses: ./.github/workflows/deploy-environment.yml
     with:
@@ -135,13 +143,168 @@ jobs:
     secrets: inherit
 
   monitoring:
+    name: Production monitoring
     needs: production
-    uses: ./.github/workflows/test-aws.yml
-    with:
-      configure-monitoring: true
-    secrets: inherit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    concurrency:
+      group: poco-production-monitoring
+      cancel-in-progress: false
+    env:
+      TARGET_LAMBDA: poco-pii-api-handler
+      # AWS x86-64 extension 1.0.776.0, pinned for us-east-1.
+      # https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-extension-versionsx86-64.html
+      INSIGHTS_LAYER: arn:aws:lambda:us-east-1:580247275435:layer:LambdaInsightsExtension:66
+      EVIDENCE_DIR: ${{ github.workspace }}/production-monitoring-evidence
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - name: Enable Lambda Insights and verify production health
+        run: |
+          set -euo pipefail
+          WORK_DIR=$(mktemp -d)
+          mkdir -p "$EVIDENCE_DIR"
+          URL='https://6xz841x652.execute-api.us-east-1.amazonaws.com/prod/health'
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$URL" \
+            > "$WORK_DIR/health.json"
+          jq -e '.status == "ok" and .env == "prod"' "$WORK_DIR/health.json" >/dev/null
+          aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" \
+            --query '{revision:RevisionId,hash:CodeSha256,layers:Layers[].Arn,runtime:Runtime,arch:Architectures}' \
+            --output json > "$WORK_DIR/original.json"
+          jq -e '.runtime == "provided.al2023" and .arch == ["x86_64"]' "$WORK_DIR/original.json" >/dev/null
+          jq --arg name "$TARGET_LAMBDA" --arg layer "$INSIGHTS_LAYER" '{
+            FunctionName: $name, RevisionId: .revision,
+            Layers: ((.layers // [] | map(select(contains(":layer:LambdaInsightsExtension:") | not))) + [$layer])
+          }' "$WORK_DIR/original.json" > "$WORK_DIR/update.json"
+          jq -e '.Layers | length <= 5' "$WORK_DIR/update.json" >/dev/null
+          UPDATED=false
+          APPLIED_REVISION=''
+          restore_on_failure() {
+            result=$?
+            trap - EXIT
+            if [[ "$result" != 0 && "$UPDATED" == true ]]; then
+              echo 'Monitoring health validation failed; restoring the previous layer configuration.' >&2
+              jq --arg name "$TARGET_LAMBDA" --arg revision "$APPLIED_REVISION" \
+                '{FunctionName: $name, RevisionId: $revision, Layers: (.layers // [])}' \
+                "$WORK_DIR/original.json" > "$WORK_DIR/restore.json"
+              if ! aws lambda update-function-configuration --cli-input-json "file://$WORK_DIR/restore.json" \
+                --query LastUpdateStatus --output text; then
+                echo 'ERROR: Layer restoration failed; inspect the production Lambda configuration.' >&2
+              else
+                aws lambda wait function-updated --function-name "$TARGET_LAMBDA"
+              fi
+            fi
+            exit "$result"
+          }
+          trap restore_on_failure EXIT
+          if ! jq -e --arg layer "$INSIGHTS_LAYER" '(.layers // []) | index($layer) != null' \
+            "$WORK_DIR/original.json" >/dev/null; then
+            APPLIED_REVISION=$(aws lambda update-function-configuration \
+              --cli-input-json "file://$WORK_DIR/update.json" --query RevisionId --output text)
+            UPDATED=true
+            aws lambda wait function-updated --function-name "$TARGET_LAMBDA"
+          fi
+          # Health requests also generate fresh monitoring samples without creating sessions.
+          for attempt in 1 2 3 4 5 6; do
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$URL" \
+              > "$WORK_DIR/health.json"
+            jq -e '.status == "ok" and .env == "prod"' "$WORK_DIR/health.json" >/dev/null
+            echo "Production health request $attempt passed."
+            sleep 1
+          done
+          AFTER_HASH=$(aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" \
+            --query CodeSha256 --output text)
+          [[ "$AFTER_HASH" == "$(jq -r .hash "$WORK_DIR/original.json")" ]]
+          echo 'Production Insights layer and health validated; application code hash preserved.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wait for CPU, memory, disk and network metrics
+        run: |
+          set -euo pipefail
+          START_TIME=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          API_NAME=$(aws apigateway get-rest-api --rest-api-id 6xz841x652 --query name --output text)
+          # Quiet functions may buffer Insights data for up to 20 minutes.
+          # Continue health traffic so active sandboxes can flush samples.
+          # https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-Troubleshooting.html
+          for attempt in {1..80}; do
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+              'https://6xz841x652.execute-api.us-east-1.amazonaws.com/prod/health' \
+              | jq -e '.status == "ok" and .env == "prod"' >/dev/null
+            END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            for metric in cpu_total_time memory_utilization tmp_used rx_bytes tx_bytes; do
+              aws cloudwatch get-metric-statistics --namespace LambdaInsights --metric-name "$metric" \
+                --dimensions "Name=function_name,Value=$TARGET_LAMBDA" \
+                --start-time "$START_TIME" --end-time "$END_TIME" --period 60 --statistics Maximum \
+                --output json > "$EVIDENCE_DIR/$metric.json"
+            done
+            aws cloudwatch get-metric-statistics --namespace AWS/ApiGateway --metric-name Latency \
+              --dimensions "Name=ApiName,Value=$API_NAME" Name=Stage,Value=prod \
+              --start-time "$START_TIME" --end-time "$END_TIME" --period 60 --statistics Average \
+              --output json > "$EVIDENCE_DIR/http-latency.json"
+            if jq -s -e 'all(.Datapoints | length > 0)' "$EVIDENCE_DIR"/*.json >/dev/null; then
+              echo 'Production CPU, memory, temporary-disk, network and HTTP latency samples verified.' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Waiting for Lambda Insights ingestion (attempt $attempt)."
+            sleep 10
+          done
+          for metric in cpu_total_time memory_utilization tmp_used rx_bytes tx_bytes http-latency; do
+            echo "$metric samples: $(jq '.Datapoints | length' "$EVIDENCE_DIR/$metric.json")"
+          done
+          echo 'ERROR: Monitoring metrics are missing after the ingestion window. Verify LabRole can write /aws/lambda-insights logs; this workflow does not change IAM.' >&2
+          exit 1
+
+      - name: Create the production dashboard
+        run: |
+          set -euo pipefail
+          export MONITOR_API_NAME
+          MONITOR_API_NAME=$(aws apigateway get-rest-api --rest-api-id 6xz841x652 --query name --output text)
+          python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          function = os.environ['TARGET_LAMBDA']
+          api = os.environ['MONITOR_API_NAME']
+          widgets = []
+          def widget(title, metrics, stat='Average'):
+              index = len(widgets)
+              widgets.append({'type': 'metric', 'x': (index % 2) * 12, 'y': (index // 2) * 6,
+                  'width': 12, 'height': 6, 'properties': {'title': title, 'region': 'us-east-1',
+                  'period': 60, 'stat': stat, 'metrics': metrics}})
+          def runtime(metric, **options):
+              return ['AWS/Lambda', metric, 'FunctionName', function, options]
+          def insights(metric, **options):
+              return ['LambdaInsights', metric, 'function_name', function, options]
+          def gateway(metric, **options):
+              return ['AWS/ApiGateway', metric, 'ApiName', api, 'Stage', 'prod', options]
+          widget('Lambda requests, errors and throttles', [runtime(m) for m in ['Invocations', 'Errors', 'Throttles']], 'Sum')
+          widget('Lambda execution duration (ms)', [runtime('Duration'), runtime('Duration', stat='p95', label='p95')])
+          widget('CPU time per minute (ms)', [insights('cpu_total_time')], 'Sum')
+          widget('Memory usage (MB left, percent right)', [insights('used_memory_max'), insights('memory_utilization', yAxis='right')], 'Maximum')
+          widget('Temporary disk used (bytes)', [insights('tmp_used')], 'Maximum')
+          widget('Network received / sent (bytes per minute)', [insights('rx_bytes'), insights('tx_bytes')], 'Sum')
+          widget('Production HTTP latency (ms)', [gateway('Latency'), gateway('Latency', stat='p95', label='p95')])
+          widget('Production HTTP 4xx / 5xx responses', [gateway('4XXError'), gateway('5XXError')], 'Sum')
+          Path(os.environ['EVIDENCE_DIR'], 'dashboard.json').write_text(json.dumps({'widgets': widgets}))
+          PY
+          aws cloudwatch put-dashboard --dashboard-name Poco-Production \
+            --dashboard-body "file://$EVIDENCE_DIR/dashboard.json" --output json > "$EVIDENCE_DIR/dashboard-result.json"
+          jq -e '(.DashboardValidationMessages // []) | length == 0' "$EVIDENCE_DIR/dashboard-result.json" >/dev/null
+          echo '[Open Poco-Production dashboard](https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards:name=Poco-Production)' >> "$GITHUB_STEP_SUMMARY"
+      - name: Save monitoring evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-monitoring-evidence
+          path: production-monitoring-evidence/
+          retention-days: 7
 
   publish-web:
+    name: Publish and verify website
     needs: monitoring
     runs-on: ubuntu-24.04
     permissions:
@@ -151,20 +314,13 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    outputs:
-      page-url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
-
-  verify-site:
-    needs: publish-web
-    runs-on: ubuntu-24.04
-    env:
-      SITE_URL: ${{ needs.publish-web.outputs.page-url }}
-      EXPECTED_COMMIT: ${{ github.sha }}
-    steps:
       - name: Verify published website and commit metadata
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+          EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           test -n "$SITE_URL"
