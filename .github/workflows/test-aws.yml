@@ -378,6 +378,7 @@ jobs:
     needs: check-environments
     if: ${{ inputs.configure-monitoring }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     environment: production
     concurrency:
       group: poco-production-monitoring
@@ -456,9 +457,15 @@ jobs:
       - name: Wait for CPU, memory, disk and network metrics
         run: |
           set -euo pipefail
-          START_TIME=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          START_TIME=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
           API_NAME=$(aws apigateway get-rest-api --rest-api-id 6xz841x652 --query name --output text)
-          for attempt in {1..12}; do
+          # Quiet functions may buffer Insights data for up to 20 minutes.
+          # Continue health traffic so active sandboxes can flush samples.
+          # https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-Troubleshooting.html
+          for attempt in {1..80}; do
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+              'https://6xz841x652.execute-api.us-east-1.amazonaws.com/prod/health' \
+              | jq -e '.status == "ok" and .env == "prod"' >/dev/null
             END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
             for metric in cpu_total_time memory_utilization tmp_used rx_bytes tx_bytes; do
               aws cloudwatch get-metric-statistics --namespace LambdaInsights --metric-name "$metric" \
@@ -477,7 +484,10 @@ jobs:
             echo "Waiting for Lambda Insights ingestion (attempt $attempt)."
             sleep 10
           done
-          echo 'ERROR: Monitoring metrics are missing. Verify LabRole can write /aws/lambda-insights logs; this workflow does not change IAM.' >&2
+          for metric in cpu_total_time memory_utilization tmp_used rx_bytes tx_bytes http-latency; do
+            echo "$metric samples: $(jq '.Datapoints | length' "$EVIDENCE_DIR/$metric.json")"
+          done
+          echo 'ERROR: Monitoring metrics are missing after the ingestion window. Verify LabRole can write /aws/lambda-insights logs; this workflow does not change IAM.' >&2
           exit 1
 
       - name: Create the production dashboard
