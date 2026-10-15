@@ -17,9 +17,11 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | `pii-tool/crates/lambda` | `poco-lambda` — AWS Lambda HTTP API |
 | `pii-tool/test_data/` | PDF/DOCX/TXT fixtures for the gold suite |
 | `docs/API.md` | HTTP API contract for the website client |
-| `docs/ENVIRONMENTS.md` | dev / test / staging / prod deploy map |
-| `.github/workflows/deploy.yml` | CI: tests → AL2023 Lambda build → deploy → smoke |
+| `docs/ENVIRONMENTS.md` | Environment setup, automatic delivery and demo checklist |
+| `.github/workflows/deploy.yml` | Automatic delivery from develop through all environments |
 | `.github/workflows/ci.yml` | Shared backend tests and frontend tests/lint/build |
+| `.github/workflows/deploy-environment.yml` | Shared Lambda deployment, package/configuration checks and health checks |
+| `.github/workflows/test-aws.yml` | AWS readiness, Testing/Staging API tests and Production monitoring setup |
 
 ---
 
@@ -55,22 +57,41 @@ file / paste text
 
 ## Deployment
 
-| Trigger | Environment | Lambda | API stage |
-|---|---|---|---|
-| push `develop` | dev | `poco-pii-api-handler-dev` | `/dev` |
-| push `test/qa` | test | `poco-pii-api-handler-test` | `/test` |
-| push `release/**` | staging | `poco-pii-api-handler-staging` | `/staging` |
-| push `main` | prod | `poco-pii-api-handler` | `/prod` |
+Merging a feature PR into `develop` starts the complete pipeline:
 
-**Do not push `main` until production is deliberately ready.**
+```text
+feature/* → PR → develop
+                    ↓
+          CI tests, lint and build
+                    ↓
+        Verify environment isolation
+                    ↓
+          Build one Lambda package
+                    ↓
+       Development → Testing → Staging
+                    ↓
+            Production backend
+                    ↓
+          Verify production monitoring
+                    ↓
+          Publish production website
+                    ↓
+         Verify the website and release metadata
+```
 
-The workflow builds and verifies the Lambda package before entering the deployment environment. On `main`, the production frontend is published only after the Lambda deployment and environment health check succeed. Other branches do not publish Pages. Deployment runs are serialized per target, including all release branches sharing staging.
+Every environment must pass package/configuration and API health checks before the next deployment starts. Testing and Staging also run live encode/decode, DynamoDB/S3 integration and Chromium browser acceptance before promotion. The same Lambda ZIP is reused throughout. Failed checks stop promotion; failure after publication reports a failed release and does not automatically roll back.
 
-Branch protections are optional for this project; the team reviews PRs and waits for CI manually before merging. The owner must configure reviewers for the `production` and `github-pages` environments before production promotion if an enforced release approval stage is required. Workflow environment references alone do not enforce approval.
+`develop` is the deployment source. The new workflow does not deploy independently from `test/qa`, `release/**` or `main`, and automatic delivery does not merge code into those branches. Branches retaining older workflows still have their previous behaviour. Branch protections remain optional; the team reviews PRs before merging into `develop`.
 
-AWS Academy Learner Lab constraints: `us-east-1` only, `LabRole` only (no custom IAM/OIDC), static credentials in GitHub secrets (refresh ~every 4 hours).
+Complete the cloud setup and verify any existing GitHub environment restrictions before merging this workflow into `develop`: that merge will start automatic delivery to production. Missing GitHub environments are created automatically when referenced; manual environment setup is optional. All deployment environments, including `github-pages`, must allow `develop` without required reviewers. The production website uses the existing Pages custom domain `littlepoco.me`.
 
-More detail: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
+AWS Academy Learner Lab uses `us-east-1`, the existing `LabRole`, and temporary credentials in GitHub secrets. Credentials must be valid for the entire run and renewed when they expire.
+
+Live API/storage integration and browser acceptance run in Testing and Staging. Browser tests exercise Encode → Vault → refresh → Decode and the unknown-token warning, with screenshots and traces retained as evidence.
+
+Production monitoring uses Lambda Insights and the `Poco-Production` CloudWatch dashboard. The existing AWS workflow can configure it before merging; delivery verifies it again before website publication.
+
+Setup, monitoring requirements and recording steps: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 
 ---
 

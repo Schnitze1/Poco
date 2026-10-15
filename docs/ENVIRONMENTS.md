@@ -1,94 +1,126 @@
-# Environments and deployment
+# Environments and automatic delivery
 
-The repository targets AWS Academy Learner Lab resources in `us-east-1`. The workflows update existing Lambda functions; they do not provision API Gateway, DynamoDB, S3, IAM, or Lambda configuration. The table below describes workflow routing, not proof that every cloud environment is currently operational.
+A feature PR merged into `develop` starts a complete automatic CI/CD run through Development, Testing, Staging and Production. Human code review happens before the merge; no branch promotion or deployment approval is needed after the run starts.
 
-One API Gateway (`poco-pii-api`, ID `6xz841x652`) serves separate stages. Verify that each stage's `lambdaName` variable and invoke permissions target the intended Lambda.
+The workflows update existing AWS Academy Learner Lab resources in `us-east-1`. They do not provision Lambda functions, API Gateway, DynamoDB, S3 or IAM. The optional monitoring setup attaches the AWS Lambda Insights layer to Production and creates a CloudWatch dashboard using the existing LabRole. Workflow configuration is not proof that the cloud setup is operational.
 
-| Branch | API stage | Lambda | GitHub deployment environment |
+## Environment layout
+
+| Runtime environment | API stage | Lambda | GitHub environment |
 |---|---|---|---|
-| `develop` | `/dev` | `poco-pii-api-handler-dev` | `dev` |
-| `test/qa` | `/test` | `poco-pii-api-handler-test` | `test` |
-| `release/**` | `/staging` | `poco-pii-api-handler-staging` | `staging` |
-| `main` | `/prod` | `poco-pii-api-handler` | `production` |
+| Development | `/dev` | `poco-pii-api-handler-dev` | `dev` |
+| Testing | `/test` | `poco-pii-api-handler-test` | `testing` |
+| Staging | `/staging` | `poco-pii-api-handler-staging` | `staging` |
+| Production | `/prod` | `poco-pii-api-handler` | `production` |
 
 API base: `https://6xz841x652.execute-api.us-east-1.amazonaws.com/{stage}`.
 
-Implementation branches, including `test/frontend-tests`, run CI but do not automatically deploy. Use `feature/*` for new implementation work. A manual `Deploy` run on an unsupported branch or tag fails during target resolution before packaging or accessing AWS credentials.
+The four runtimes need separate Lambda functions, DynamoDB tables and S3 buckets. API Gateway `6xz841x652` has a stage for each; each stage's `lambdaName` variable and invoke permissions must route to the intended Lambda. Sharing one API Gateway does not mean sharing runtime or storage.
 
-## Delivery flow
+`develop` triggers the entire chain. Feature branches run CI and deploy after merging into `develop`. In the new workflow, `test/qa`, `release/**` and `main` run CI but do not select an environment. The workflow does not automatically merge or synchronize those branches. Branches retaining older workflow files can still use their previous deployment behaviour; avoid using them for promotion after switching to this flow. The environment is named Testing even though the API stage remains `test`.
 
-Promote a reviewed candidate through `develop` → `test/qa` → `release/<version>` → `main`. These promotions are team decisions, not automatic transitions between environments. Create a new release candidate rather than assuming an old release branch contains the latest reviewed code.
+## What runs automatically
 
-The `Deploy` workflow (`.github/workflows/deploy.yml`) runs on pushes to delivery branches and supports manual dispatch:
+The delivery workflow is `.github/workflows/deploy.yml`. It triggers on pushes to `develop`, including PR merges, and supports manual dispatch from `develop` only.
 
-1. Resolve and validate the branch's target directly in the YAML workflow.
-2. Call the shared CI: locked Rust workspace tests, frontend tests, lint, and build.
-3. Build Lambda in `amazonlinux:2023`, verify the `bootstrap.zip` binary, and upload the verified package as a workflow artifact.
-4. Enter the target GitHub environment and wait for any configured protection rules. Download the verified package, configure AWS credentials, update Lambda, and wait for the update to finish.
-5. Request `/health`, requiring HTTP 200, `status: ok`, and the expected API environment.
-6. On `main` only, run the `publish-web` job to publish the validated production frontend artifact through `github-pages`.
+1. Validate the source branch and call shared CI: locked Rust workspace tests, frontend unit tests, lint, TypeScript and production build. Save the production Pages artifact with commit metadata.
+2. Call the shared read-only `test-aws.yml` workflow. Check all four Lambda runtime/role/storage configurations, API stage variables, distinct table/bucket names, actual DynamoDB table schemas/TTL and S3 bucket access/region before changing code.
+3. Build Lambda once in `amazonlinux:2023`, validate its executable/glibc compatibility and save `bootstrap.zip` as an artifact.
+4. Deploy that ZIP to Development, then Testing, then Staging, then Production. Each stage calls the shared `deploy-environment.yml` and waits for the previous stage to pass.
+5. At each stage, check the deployed Lambda package hash and configuration, then verify `/health` returns HTTP 200, `status: ok` and the expected environment identity. After Testing and Staging deployment, rerun readiness checks and test encode, API session mappings, actual DynamoDB persistence/expiry, S3 archive content and decode. Then build the frontend for that API stage and run Chromium acceptance for Encode → Vault → refresh → Decode plus an unknown-token warning. Both environments must pass integration and browser acceptance before promotion.
+6. After production backend health verification passes, enable/verify production Lambda Insights, wait for CPU/memory/disk/network/HTTP metric samples and create/update the production dashboard. Then publish the validated production frontend through GitHub Pages. Check `deployment.json` identifies the workflow commit and production stage, and check the public website is reachable.
+7. Keep the Lambda artifact for seven days. Save workflow logs and screenshots as evidence for the report.
 
-CI embeds the matching API stage in its frontend build. Only the `main` build uploads a Pages artifact, using `VITE_API_STAGE=prod`. Website publication follows successful production backend deployment and health verification in the same `deploy.yml` run. Branch routing, Lambda build commands, and Pages publication are contained in the YAML workflows.
+Deployment orchestration and live acceptance checks stay in YAML; there are no pipeline helper scripts or separate E2E spec/config files. Browser acceptance uses the Playwright library in an inline Node script. Development, Testing and Staging have persistent API/storage runtimes in AWS, but this workflow does not publish frontend sites for them. Only Production has a public Pages site (`littlepoco.me`). The Lambda package is identical across environments.
 
-The production website uses the existing `littlepoco.me` domain configured in GitHub Pages settings and DNS. Actions-based publishing does not require a CNAME file.
+Failed CI, readiness, health, API integration or monitoring checks prevent subsequent stages. A failure after production has already changed marks the run failed but does not roll back deployed code. Backend and frontend updates are separate operations; this pipeline does not promise an atomic release.
 
-CI and deployment jobs use Ubuntu 24.04 runners; the Lambda release binary is built inside Amazon Linux 2023 to match its runtime. Each environment builds from the candidate's locked dependencies rather than promoting one shared binary across environments.
+One concurrency group serializes the entire delivery chain, so runs cannot overwrite another run's Testing/Staging environments. Active runs are not canceled by newer pushes. GitHub may replace a pending run with a newer pending run, so not every queued commit is guaranteed a deployment.
 
-Deployment workflow concurrency prevents overlapping runs for the same target. All `release/**` branches share the staging concurrency group. Active deployment runs are not canceled by a newer push. GitHub may replace a pending run with a newer pending run; concurrency is not a promise to deploy every queued commit.
+## Setup before the first deployment
 
-## Owner setup for production approvals
+Complete these before merging the automatic workflow into `develop`; that merge triggers production delivery.
 
-To include an enforced release approval stage, configure these GitHub environments in repository **Settings → Environments**:
+- The workflow references GitHub environments `dev`, `testing`, `staging`, `production` and `github-pages`. GitHub automatically creates missing environments without reviewers or environment secrets, so you do not need settings access to create them manually. Existing restrictions must allow `develop` without approval pauses. Only changing restrictions or adding environment-specific secrets requires the owner/admin.
+- Keep Pages **Source: GitHub Actions**, the existing custom domain and DNS. Its environment's branch policy must allow `develop`; a `main`-only policy blocks this pipeline.
+- Store valid `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` as repository secrets. Environment secrets can override them for environment jobs; preflight uses repository credentials. All must reach the same intended Learner Lab account.
+- Verify four Lambda functions use runtime `provided.al2023`, handler `bootstrap`, architecture `x86_64` and the existing `LabRole`. Set `ENVIRONMENT` to `dev`, `test`, `staging` or `prod`, and provide nonempty `DYNAMODB_TABLE` and `S3_BUCKET`. Verify timeout/memory suit encode/decode; the prior setup used 512 MB / 30 seconds.
+- Verify DynamoDB string keys `sessionId` (partition) and `token` (sort), plus enabled TTL on `expiresAt`. Enable each Lambda to access its own table/bucket. The deployment runner needs Lambda/API Gateway configuration reads, DynamoDB table/TTL descriptions, S3 bucket access checks and Lambda code updates. Readiness checks describe storage resources but do not read or write application items/objects or prove the Lambda role can use them.
+- Verify API Gateway stage integrations, Lambda invocation permissions and CORS for local development and the public site. Direct S3 browser uploads also need appropriate bucket CORS.
+- Set up production monitoring as described below and confirm real data appears.
 
-| Environment | Allowed deployment branches | Review requirement |
-|---|---|---|
-| `dev` | `develop` | Team choice |
-| `test` | `test/qa` | Team choice |
-| `staging` | `release/**` | Team choice; recommended for release sign-off |
-| `production` | `main` | Required reviewer; prevent self-review |
-| `github-pages` | `main` | Required reviewer; prevent self-review |
+Branch protections remain optional: review PRs and check CI manually before merging. This setup does not require another person's review or prevent you from merging your own PR. GitHub does not allow authors to submit a formal approving review on their own PR; reviewing the changes and merging is the team's sign-off. Deployment jobs still depend on passing CI, even without branch protection. For environment configuration see [GitHub's environment documentation](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) and [GitHub's PR approval rules](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews).
 
-The backend and Pages jobs enter different environments, so production may involve two approvals. The verified Lambda package is available before the backend approval job starts.
+Learner Lab credentials expire. Renew them before the run; this workflow cannot renew the university lab session. A deployment run is automatic while valid credentials and resource permissions remain available. Expired credentials are a setup failure, not evidence that the pipeline has completed successfully.
 
-Referencing an environment in YAML does not configure required reviewers. GitHub can create an unconfigured environment when a workflow first references it. For an enforced approval stage, the owner must set reviewers and branch policies before promoting the release to `main`.
+## Read-only readiness checkpoint
 
-Branch protections are optional for this project. The team reviews PRs and waits for `backend-tests` and `frontend-checks` to pass before merging manually; GitHub does not enforce merge restrictions without protection rules. Deployment jobs still require successful CI. PR validation has no path filters, so documentation-only changes also receive both results. If the team later enables required checks, select the actual check names shown on a PR rather than the removed `Frontend Tests` workflow.
-
-See GitHub's [environment setup](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) and [concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
-
-## AWS prerequisites
-
-Expected Lambda configuration:
-
-- Runtime `provided.al2023`, handler `bootstrap`, architecture `x86_64`.
-- Learner Lab `LabRole`; verify its existing access to each environment's resources.
-- Memory/timeout as required by the application; the prior setup used 512 MB / 30 seconds.
-- `ENVIRONMENT` matching `dev`, `test`, `staging`, or `prod`.
-- `DYNAMODB_TABLE` pointing to that environment's session table; the API guide uses `poco-pii-sessions-{stage}` names. Verify actual table names rather than assuming they exist.
-- `S3_BUCKET` pointing to that environment's document bucket when storage/upload features are used.
-- `RUST_LOG=info` and `LD_LIBRARY_PATH=/var/task` as appropriate for the packaged runtime.
-
-Verify DynamoDB partition/sort keys (`sessionId`, `token`) and TTL configuration for `expiresAt`. API Gateway must route to the correct Lambda and support the frontend origin/methods through CORS. Direct browser uploads also need suitable S3 CORS configuration.
-
-The AWS deployment job reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` from GitHub secrets and uses `us-east-1`. Existing repository secrets can be used; environment secrets override secrets of the same name. Refresh expired Learner Lab credentials before deployment. CI tests do not use these secrets or live AWS storage.
-
-## Verification before recording
-
-For each environment:
-
-1. Verify the branch, workflow commit, Lambda target, and resource configuration.
-2. Confirm `/health` returns the expected environment.
-3. Encode synthetic text into a fresh session, retrieve its mappings, and decode it back to the original text.
-4. Find that session in the intended DynamoDB table. Local/in-memory tests do not prove deployed persistence.
-5. Verify actual S3 objects if demonstrating uploads or redacted-text storage; archive errors are non-fatal to encode.
-6. Inspect the corresponding CloudWatch Lambda log group and available monitoring. The production group is `/aws/lambda/poco-pii-api-handler`; other environments have their Lambda name suffix.
-7. For production, confirm the published browser calls `/prod` and the domain serves the intended frontend.
-
-Example health check (replace `dev` with the stage under review):
+Run the existing `test-aws.yml` workflow from the feature branch before creating or merging the deployment PR:
 
 ```sh
-curl --fail --silent --show-error \
-  https://6xz841x652.execute-api.us-east-1.amazonaws.com/dev/health
+gh workflow run test-aws.yml --repo Schnitze1/Poco --ref feature/cicd-readiness
 ```
 
-The automated smoke check currently verifies liveness and environment identity. Full encode/decode and storage verification still needs the live acceptance checks above; a green health check alone is insufficient.
+This uses repository credentials and requires no GitHub environment settings access. It reads AWS identity, Lambda configuration, API stage targets, table schemas/TTL and bucket access/regions. It requires four different tables and buckets and writes a resource summary to the Actions run summary. It does not deploy, provision resources or change application data. The deployment workflow calls the same checks before packaging.
+
+If it fails, fix the specific AWS configuration or permission reported and rerun this checkpoint. A passing readiness check verifies resource configuration and runner access; it does not replace live encode/decode, persistence or end-to-end acceptance tests.
+
+## Live API integration checkpoint
+
+Run the same existing workflow with its optional integration test enabled:
+
+```sh
+gh workflow run test-aws.yml --repo Schnitze1/Poco --ref feature/cicd-readiness \
+  -f run-api-tests=true -f api-stage=test
+```
+
+The default invocation remains read-only. With `run-api-tests=true`, the workflow first verifies all four environments, then creates one fresh synthetic session in the selected Testing or Staging API. It checks email redaction, API mappings, a directly queried DynamoDB item and its expiry, actual S3 archive content and decode restoration. Cleanup runs on normal completion or test failure: it deletes that session through the API, checks its table items are gone and deletes only its archive object. A test or cleanup failure fails the job. The API test is restricted to `test` and `staging`.
+
+Deployment reuses this test after updating Testing and Staging. Feature-branch diagnostic runs test the currently deployed code; only the delivery run after a merge verifies the newly deployed candidate. Neither invocation deploys code by itself. The same job builds and serves the candidate frontend on the runner and runs Chromium against that API. It checks redaction, vault contents, session persistence after refresh, decode restoration and the visible unknown-token warning. It reuses only its own synthetic session, so the same cleanup removes the API and browser writes. Production monitoring is configured using the optional mode below.
+
+Browser evidence is uploaded as `browser-acceptance-test` or `browser-acceptance-staging` for seven days. It includes success/failure screenshots, preview logs and a Playwright trace. Download before expiry; inspect a trace locally from `web/` with:
+
+```sh
+npx playwright show-trace /path/to/trace.zip
+```
+
+The preview runs a production frontend build connected directly to the real stage API, so the browser checks also exercise CORS and network integration. Screenshots/traces contain synthetic test data. A failed browser assertion, page error or API error fails the job and stops promotion.
+
+## Assignment coverage and remaining evidence
+
+| Specification | Pipeline support | Evidence needed |
+|---|---|---|
+| Level 1: four environments | Separate Lambda/API stages and storage, validated before delivery | AWS configuration and isolation screenshots |
+| Level 2: production instrumentation/monitoring | Automated Lambda Insights setup, metric ingestion checks and the Poco-Production CloudWatch dashboard | A successful monitoring run plus populated dashboard screenshots under real traffic |
+| Level 3: automated unit, integration and end-to-end tests before production | Rust/Vitest CI plus live API/DynamoDB/S3 integration and Chromium acceptance gates in Testing/Staging | Successful cloud runs, browser screenshots/traces and public app/database verification |
+| Level 4: automatic trigger-to-production workflow | A `develop` push starts the full chain with no further branch merges | A visible feature change progressing through one successful run to the published website |
+
+## Production monitoring checkpoint
+
+Configure instrumentation before the final merge using the existing workflow:
+
+```sh
+gh workflow run test-aws.yml --repo Schnitze1/Poco --ref feature/cicd-readiness \
+  -f configure-monitoring=true
+```
+
+This mode updates only the Production Lambda's layer configuration and the `Poco-Production` CloudWatch dashboard; it does not publish new application code or change IAM. It preserves unrelated layers, uses a revision check to avoid overwriting concurrent configuration changes and verifies that the application code hash stays the same. If health validation fails after a layer update, it attempts to restore the previous layers. Missing metric samples or dashboard errors fail the monitoring job; these later failures do not roll back a healthy layer configuration.
+
+The workflow pins the AWS x86-64 [Lambda Insights extension](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-extension-versionsx86-64.html) for `us-east-1` (extension 1.0.776.0, layer version 66). It relies on the existing `LabRole` log permissions for `/aws/lambda-insights`, generates a few Production health requests and waits for actual CPU, memory, disk, network and HTTP-latency samples. It does not create or attach IAM policies. If the lab denies layer updates, monitoring logs, metric reads or dashboard creation, resolve the reported permission with the lab owner/instructor before claiming completion.
+
+Open **CloudWatch → Dashboards → Poco-Production** in `us-east-1`. The dashboard covers requests/errors/throttles, execution duration, CPU time, memory, temporary-disk usage, received/sent bytes, API Gateway HTTP latency and HTTP errors. See [Lambda Insights metrics](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-metrics-lambda-functions.html) for units. CPU time is measured in milliseconds; temporary-disk usage is bytes used rather than disk I/O throughput. These are the serverless equivalents available here and should be explained accurately in the presentation.
+
+The application log group is `/aws/lambda/poco-pii-api-handler`; enhanced performance events go to `/aws/lambda-insights`. Save populated dashboard screenshots and the `production-monitoring-evidence` artifact for the final report. Metrics may be delayed: AWS documents up to 20 minutes for quiet functions. The check continues health traffic and allows a bounded ingestion window (30-minute job timeout). See [Insights troubleshooting](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-Troubleshooting.html). The artifact retains sample responses and dashboard JSON for seven days. The normal delivery workflow reuses monitoring setup/verification after Production deployment and before website publication.
+
+## Demonstration recording
+
+1. Show the four runtime/storage environments and production dashboard; open the current public app.
+2. Make a small visible UI change on a feature branch and show its PR CI results.
+3. Merge the PR into `develop`. Follow the resulting **Deploy** run through CI, preflight, package, Development, Testing, Staging, Production and Pages publication without manual environment promotions.
+4. Show Testing/Staging readiness, health, live API/storage integration and browser acceptance passed before production started. Open their screenshot/trace artifacts and show the same Lambda artifact/hash being reused.
+5. Open the public website, show the visible change and demonstrate Encode → Vault → Decode. Show the final public-site check verifies the same commit.
+6. Show fresh production metrics/logs and save screenshots, logs and test reports for the final report. If a failure is demonstrated, show that later stages are skipped.
+
+The live API integration and Chromium acceptance tests verify the core encode/vault/decode flow and actual DynamoDB/S3 persistence using synthetic data. Browser coverage is currently desktop Chromium and the core text flow; it does not cover uploads, every UI action or other browsers. Manually demonstrate additional features and actual DynamoDB/S3 data as supplementary evidence.
+
+The prepared workflows and local validation are not a substitute for this successful live demonstration. Run and verify the complete cloud pipeline before recording.
