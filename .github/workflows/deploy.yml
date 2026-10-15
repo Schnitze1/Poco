@@ -134,8 +134,15 @@ jobs:
       lambda: poco-pii-api-handler
     secrets: inherit
 
-  publish-web:
+  monitoring:
     needs: production
+    uses: ./.github/workflows/test-aws.yml
+    with:
+      configure-monitoring: true
+    secrets: inherit
+
+  publish-web:
+    needs: monitoring
     runs-on: ubuntu-24.04
     permissions:
       contents: read

@@ -2,7 +2,7 @@
 
 A feature PR merged into `develop` starts a complete automatic CI/CD run through Development, Testing, Staging and Production. Human code review happens before the merge; no branch promotion or deployment approval is needed after the run starts.
 
-The workflows update existing AWS Academy Learner Lab resources in `us-east-1`. They do not provision Lambda functions, API Gateway, DynamoDB, S3, IAM or production instrumentation. Workflow configuration is not proof that the cloud setup is operational.
+The workflows update existing AWS Academy Learner Lab resources in `us-east-1`. They do not provision Lambda functions, API Gateway, DynamoDB, S3 or IAM. The optional monitoring setup attaches the AWS Lambda Insights layer to Production and creates a CloudWatch dashboard using the existing LabRole. Workflow configuration is not proof that the cloud setup is operational.
 
 ## Environment layout
 
@@ -28,12 +28,12 @@ The delivery workflow is `.github/workflows/deploy.yml`. It triggers on pushes t
 3. Build Lambda once in `amazonlinux:2023`, validate its executable/glibc compatibility and save `bootstrap.zip` as an artifact.
 4. Deploy that ZIP to Development, then Testing, then Staging, then Production. Each stage calls the shared `deploy-environment.yml` and waits for the previous stage to pass.
 5. At each stage, check the deployed Lambda package hash and configuration, then verify `/health` returns HTTP 200, `status: ok` and the expected environment identity. After Testing and Staging deployment, rerun readiness checks and test encode, API session mappings, actual DynamoDB persistence/expiry, S3 archive content and decode. Both environments must pass these integration tests before promotion.
-6. After production backend health verification passes, publish the validated production frontend through GitHub Pages. Check `deployment.json` identifies the workflow commit and production stage, and check the public website is reachable.
+6. After production backend health verification passes, enable/verify production Lambda Insights, wait for CPU/memory/disk/network/HTTP metric samples and create/update the production dashboard. Then publish the validated production frontend through GitHub Pages. Check `deployment.json` identifies the workflow commit and production stage, and check the public website is reachable.
 7. Keep the Lambda artifact for seven days. Save workflow logs and screenshots as evidence for the report.
 
 All deployment orchestration stays in YAML; there are no pipeline helper shell scripts or Playwright tests. Development, Testing and Staging have persistent API/storage runtimes in AWS, but this workflow does not publish frontend sites for them. Only Production has a public Pages site (`littlepoco.me`). The Lambda package is identical across environments.
 
-Failed CI, readiness, health or API integration checks prevent subsequent deployments. A failure after production has already changed marks the run failed but does not roll back deployed code. Backend and frontend updates are separate operations; this pipeline does not promise an atomic release.
+Failed CI, readiness, health, API integration or monitoring checks prevent subsequent stages. A failure after production has already changed marks the run failed but does not roll back deployed code. Backend and frontend updates are separate operations; this pipeline does not promise an atomic release.
 
 One concurrency group serializes the entire delivery chain, so runs cannot overwrite another run's Testing/Staging environments. Active runs are not canceled by newer pushes. GitHub may replace a pending run with a newer pending run, so not every queued commit is guaranteed a deployment.
 
@@ -76,20 +76,33 @@ gh workflow run test-aws.yml --repo Schnitze1/Poco --ref feature/cicd-readiness 
 
 The default invocation remains read-only. With `run-api-tests=true`, the workflow first verifies all four environments, then creates one fresh synthetic session in the selected Testing or Staging API. It checks email redaction, API mappings, a directly queried DynamoDB item and its expiry, actual S3 archive content and decode restoration. Cleanup runs on normal completion or test failure: it deletes that session through the API, checks its table items are gone and deletes only its archive object. A test or cleanup failure fails the job. The API test is restricted to `test` and `staging`.
 
-Deployment reuses this test after updating Testing and Staging. Feature-branch diagnostic runs test the currently deployed code; only the delivery run after a merge verifies the newly deployed candidate. Neither invocation deploys code by itself. Browser interactions and production monitoring are separate requirements.
+Deployment reuses this test after updating Testing and Staging. Feature-branch diagnostic runs test the currently deployed code; only the delivery run after a merge verifies the newly deployed candidate. Neither invocation deploys code by itself. Browser interactions remain a separate requirement. Production monitoring is configured using the optional mode below.
 
 ## Assignment coverage and remaining evidence
 
 | Specification | Pipeline support | Evidence needed |
 |---|---|---|
 | Level 1: four environments | Separate Lambda/API stages and storage, validated before delivery | AWS configuration and isolation screenshots |
-| Level 2: production instrumentation/monitoring | CloudWatch logs/basic metrics exist for Lambda; enhanced monitoring must be configured separately | Production dashboard with actual CPU, memory, disk/network and request metrics |
+| Level 2: production instrumentation/monitoring | Automated Lambda Insights setup, metric ingestion checks and the Poco-Production CloudWatch dashboard | A successful monitoring run plus populated dashboard screenshots under real traffic |
 | Level 3: automated unit, integration and end-to-end tests before production | Shared Rust/Vitest CI plus live API/DynamoDB/S3 integration gates in Testing/Staging; browser acceptance tests are missing | Add automated browser acceptance coverage before claiming completion, then verify the public app/database |
 | Level 4: automatic trigger-to-production workflow | A `develop` push starts the full chain with no further branch merges | A visible feature change progressing through one successful run to the published website |
 
-For Level 2, enable [CloudWatch Lambda Insights](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-insights.html) for the production Lambda using permitted Learner Lab configuration. Its extension collects CPU time, memory, disk and network metrics. Verify `LabRole` already has the necessary permissions; this repository does not create or change IAM roles. If lab permissions block instrumentation, resolve that with the lab owner/instructor before claiming Level 2 completion.
+## Production monitoring checkpoint
 
-Use the Lambda Insights dashboard alongside Lambda Duration/Errors/Invocations and API Gateway latency/error metrics. Generate synthetic traffic, wait for ingestion and capture populated graphs. The production log group is `/aws/lambda/poco-pii-api-handler`. Logs and a healthy API alone do not demonstrate the required monitoring. CPU time and temporary-disk usage are Lambda-specific metrics; explain their meaning when presenting them.
+Configure instrumentation before the final merge using the existing workflow:
+
+```sh
+gh workflow run test-aws.yml --repo Schnitze1/Poco --ref feature/cicd-readiness \
+  -f configure-monitoring=true
+```
+
+This mode updates only the Production Lambda's layer configuration and the `Poco-Production` CloudWatch dashboard; it does not publish new application code or change IAM. It preserves unrelated layers, uses a revision check to avoid overwriting concurrent configuration changes and verifies that the application code hash stays the same. If health validation fails after a layer update, it attempts to restore the previous layers. Missing metric samples or dashboard errors fail the monitoring job; these later failures do not roll back a healthy layer configuration.
+
+The workflow pins the AWS x86-64 [Lambda Insights extension](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-extension-versionsx86-64.html) for `us-east-1` (extension 1.0.776.0, layer version 66). It relies on the existing `LabRole` log permissions for `/aws/lambda-insights`, generates a few Production health requests and waits for actual CPU, memory, disk, network and HTTP-latency samples. It does not create or attach IAM policies. If the lab denies layer updates, monitoring logs, metric reads or dashboard creation, resolve the reported permission with the lab owner/instructor before claiming completion.
+
+Open **CloudWatch → Dashboards → Poco-Production** in `us-east-1`. The dashboard covers requests/errors/throttles, execution duration, CPU time, memory, temporary-disk usage, received/sent bytes, API Gateway HTTP latency and HTTP errors. See [Lambda Insights metrics](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-metrics-lambda-functions.html) for units. CPU time is measured in milliseconds; temporary-disk usage is bytes used rather than disk I/O throughput. These are the serverless equivalents available here and should be explained accurately in the presentation.
+
+The application log group is `/aws/lambda/poco-pii-api-handler`; enhanced performance events go to `/aws/lambda-insights`. Save populated dashboard screenshots and the `production-monitoring-evidence` artifact for the final report. Metrics are near real time and may take a few minutes to appear. The artifact retains sample responses and dashboard JSON for seven days. The normal delivery workflow reuses monitoring setup/verification after Production deployment and before website publication.
 
 ## Demonstration recording
 

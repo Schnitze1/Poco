@@ -21,7 +21,7 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | `.github/workflows/deploy.yml` | Automatic delivery from develop through all environments |
 | `.github/workflows/ci.yml` | Shared backend tests and frontend tests/lint/build |
 | `.github/workflows/deploy-environment.yml` | Shared Lambda deployment, package/configuration checks and health checks |
-| `.github/workflows/test-aws.yml` | AWS readiness checks and optional Testing/Staging API integration tests |
+| `.github/workflows/test-aws.yml` | AWS readiness, Testing/Staging API tests and Production monitoring setup |
 
 ---
 
@@ -72,6 +72,8 @@ feature/* → PR → develop
                     ↓
             Production backend
                     ↓
+          Verify production monitoring
+                    ↓
           Publish production website
                     ↓
          Verify the website and release metadata
@@ -86,6 +88,8 @@ Complete the cloud setup and verify any existing GitHub environment restrictions
 AWS Academy Learner Lab uses `us-east-1`, the existing `LabRole`, and temporary credentials in GitHub secrets. Credentials must be valid for the entire run and renewed when they expire.
 
 Live API/storage integration tests run in Testing and Staging. Automated browser end-to-end acceptance tests remain required for the project specification and are not currently included.
+
+Production monitoring uses Lambda Insights and the `Poco-Production` CloudWatch dashboard. The existing AWS workflow can configure it before merging; delivery verifies it again before website publication.
 
 Setup, monitoring requirements and recording steps: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 
