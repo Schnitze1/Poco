@@ -17,7 +17,7 @@ npm run lint
 npm run build
 ```
 
-`npm run test:ci` runs the colocated Vitest tests once using jsdom. `npm test` starts watch mode. The persistence tests cover empty storage, workspace restoration, clearing an old session, and malformed stored JSON.
+`npm run test:ci` runs the colocated Vitest tests once using jsdom. It uses the plain-text TAP reporter: each test has an `ok` or `not ok` result without decorative status symbols. GitHub Actions captures this output under **frontend-checks → Run frontend tests**; there is currently no separate HTML report or coverage report. `npm test` starts watch mode. The persistence tests cover empty storage, workspace restoration, clearing an old session, and malformed stored JSON.
 
 The shared `.github/workflows/ci.yml` runs locked Rust tests plus frontend tests, lint and build on implementation-branch pushes and pull requests. These checks use in-memory backend storage and do not prove live AWS behaviour.
 

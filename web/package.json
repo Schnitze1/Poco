@@ -9,7 +9,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest",
-    "test:ci": "vitest run"
+    "test:ci": "vitest run --reporter=tap-flat"
   },
   "dependencies": {
     "pdfjs-dist": "^4.8.69",
