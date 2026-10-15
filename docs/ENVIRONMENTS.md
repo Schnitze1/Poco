@@ -27,13 +27,13 @@ The delivery workflow is `.github/workflows/deploy.yml`. It triggers on pushes t
 2. Call the shared read-only `test-aws.yml` workflow. Check all four Lambda runtime/role/storage configurations, API stage variables, distinct table/bucket names, actual DynamoDB table schemas/TTL and S3 bucket access/region before changing code.
 3. Build Lambda once in `amazonlinux:2023`, validate its executable/glibc compatibility and save `bootstrap.zip` as an artifact.
 4. Deploy that ZIP to Development, then Testing, then Staging, then Production. Each stage calls the shared `deploy-environment.yml` and waits for the previous stage to pass.
-5. At each stage, check the deployed Lambda package hash and configuration, then verify `/health` returns HTTP 200, `status: ok` and the expected environment identity.
+5. At each stage, check the deployed Lambda package hash and configuration, then verify `/health` returns HTTP 200, `status: ok` and the expected environment identity. After Testing and Staging deployment, rerun readiness checks and test encode, API session mappings, actual DynamoDB persistence/expiry, S3 archive content and decode. Both environments must pass these integration tests before promotion.
 6. After production backend health verification passes, publish the validated production frontend through GitHub Pages. Check `deployment.json` identifies the workflow commit and production stage, and check the public website is reachable.
 7. Keep the Lambda artifact for seven days. Save workflow logs and screenshots as evidence for the report.
 
 All deployment orchestration stays in YAML; there are no pipeline helper shell scripts or Playwright tests. Development, Testing and Staging have persistent API/storage runtimes in AWS, but this workflow does not publish frontend sites for them. Only Production has a public Pages site (`littlepoco.me`). The Lambda package is identical across environments.
 
-Failed CI, environment configuration or health checks prevent subsequent deployments. A failure after production has already changed marks the run failed but does not roll back deployed code. Backend and frontend updates are separate operations; this pipeline does not promise an atomic release.
+Failed CI, readiness, health or API integration checks prevent subsequent deployments. A failure after production has already changed marks the run failed but does not roll back deployed code. Backend and frontend updates are separate operations; this pipeline does not promise an atomic release.
 
 One concurrency group serializes the entire delivery chain, so runs cannot overwrite another run's Testing/Staging environments. Active runs are not canceled by newer pushes. GitHub may replace a pending run with a newer pending run, so not every queued commit is guaranteed a deployment.
 
@@ -65,13 +65,26 @@ This uses repository credentials and requires no GitHub environment settings acc
 
 If it fails, fix the specific AWS configuration or permission reported and rerun this checkpoint. A passing readiness check verifies resource configuration and runner access; it does not replace live encode/decode, persistence or end-to-end acceptance tests.
 
+## Live API integration checkpoint
+
+Run the same existing workflow with its optional integration test enabled:
+
+```sh
+gh workflow run test-aws.yml --repo Schnitze1/Poco --ref feature/cicd-readiness \
+  -f run-api-tests=true -f api-stage=test
+```
+
+The default invocation remains read-only. With `run-api-tests=true`, the workflow first verifies all four environments, then creates one fresh synthetic session in the selected Testing or Staging API. It checks email redaction, API mappings, a directly queried DynamoDB item and its expiry, actual S3 archive content and decode restoration. Cleanup runs on normal completion or test failure: it deletes that session through the API, checks its table items are gone and deletes only its archive object. A test or cleanup failure fails the job. The API test is restricted to `test` and `staging`.
+
+Deployment reuses this test after updating Testing and Staging. Feature-branch diagnostic runs test the currently deployed code; only the delivery run after a merge verifies the newly deployed candidate. Neither invocation deploys code by itself. Browser interactions and production monitoring are separate requirements.
+
 ## Assignment coverage and remaining evidence
 
 | Specification | Pipeline support | Evidence needed |
 |---|---|---|
 | Level 1: four environments | Separate Lambda/API stages and storage, validated before delivery | AWS configuration and isolation screenshots |
 | Level 2: production instrumentation/monitoring | CloudWatch logs/basic metrics exist for Lambda; enhanced monitoring must be configured separately | Production dashboard with actual CPU, memory, disk/network and request metrics |
-| Level 3: automated unit, integration and end-to-end tests before production | Shared Rust/Vitest CI and deployed health checks; deployed integration and browser acceptance tests are missing | Add replacement automated tests against Testing before claiming completion, then verify the public app/database |
+| Level 3: automated unit, integration and end-to-end tests before production | Shared Rust/Vitest CI plus live API/DynamoDB/S3 integration gates in Testing/Staging; browser acceptance tests are missing | Add automated browser acceptance coverage before claiming completion, then verify the public app/database |
 | Level 4: automatic trigger-to-production workflow | A `develop` push starts the full chain with no further branch merges | A visible feature change progressing through one successful run to the published website |
 
 For Level 2, enable [CloudWatch Lambda Insights](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-insights.html) for the production Lambda using permitted Learner Lab configuration. Its extension collects CPU time, memory, disk and network metrics. Verify `LabRole` already has the necessary permissions; this repository does not create or change IAM roles. If lab permissions block instrumentation, resolve that with the lab owner/instructor before claiming Level 2 completion.
@@ -83,10 +96,10 @@ Use the Lambda Insights dashboard alongside Lambda Duration/Errors/Invocations a
 1. Show the four runtime/storage environments and production dashboard; open the current public app.
 2. Make a small visible UI change on a feature branch and show its PR CI results.
 3. Merge the PR into `develop`. Follow the resulting **Deploy** run through CI, preflight, package, Development, Testing, Staging, Production and Pages publication without manual environment promotions.
-4. Show Testing/Staging configuration and health checks passed before production started, and show the same Lambda artifact/hash being reused. Once replacement integration/end-to-end tests are added, show their results too.
+4. Show Testing/Staging readiness, health and live API/storage integration checks passed before production started, and show the same Lambda artifact/hash being reused. Once browser acceptance tests are added, show their results too.
 5. Open the public website, show the visible change and demonstrate Encode → Vault → Decode. Show the final public-site check verifies the same commit.
 6. Show fresh production metrics/logs and save screenshots, logs and test reports for the final report. If a failure is demonstrated, show that later stages are skipped.
 
-Automated health and configuration checks do not prove encode/decode, browser behaviour or actual storage persistence. The removed Playwright suite must be replaced by automated integration and end-to-end acceptance tests against the Testing environment to fulfil Level 3; Level 4 also requires all prior levels. Manually demonstrate encode/decode, vault edits and actual DynamoDB/S3 data as supplementary evidence.
+The live API integration tests verify encode/decode and actual DynamoDB/S3 persistence using synthetic data. Automated browser end-to-end acceptance tests against Testing remain necessary to fulfil Level 3; Level 4 also requires all prior levels. Manually demonstrate encode/decode, vault edits and actual DynamoDB/S3 data as supplementary evidence.
 
 The prepared workflows and local validation are not a substitute for this successful live demonstration. Run and verify the complete cloud pipeline before recording.

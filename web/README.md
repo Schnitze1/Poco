@@ -21,11 +21,11 @@ npm run build
 
 The shared `.github/workflows/ci.yml` runs locked Rust tests plus frontend tests, lint and build on implementation-branch pushes and pull requests. These checks use in-memory backend storage and do not prove live AWS behaviour.
 
-Merging into `develop` starts automatic delivery through Development, Testing, Staging and Production. The workflow builds one Lambda ZIP and reuses it across all environments. Each deployment must pass package/configuration and API health checks before the next environment starts. Pipeline commands stay inside YAML workflows.
+Merging into `develop` starts automatic delivery through Development, Testing, Staging and Production. The workflow builds one Lambda ZIP and reuses it across all environments. Each deployment must pass package/configuration and API health checks before the next environment starts. Testing and Staging also require live API/storage integration tests to pass before promotion. Pipeline commands stay inside YAML workflows.
 
 CI prepares the production Pages artifact with `VITE_API_STAGE=prod` and commit metadata. After the production backend health check passes, the workflow publishes that artifact and checks the public website is reachable and its release metadata matches the workflow commit.
 
-There are currently no automated deployed API/storage integration or browser end-to-end acceptance tests. The project specification requires these before production deployment, so replacement tests are still needed. Unit tests and health checks alone do not verify the complete user flow or actual DynamoDB/S3 writes.
+The YAML workflow tests encode/decode against the deployed Testing and Staging APIs, reads the synthetic mapping directly from DynamoDB and compares the actual S3 archive with the redacted output. It then deletes its own session mappings and archive, verifying the table has no remaining items for that session. Automated browser end-to-end acceptance tests are still missing; these remain required to demonstrate the complete user flow.
 
 Branch protections are optional. Missing GitHub environments are created automatically without reviewers or environment secrets; the workflow uses repository AWS secrets. Existing restrictions on `dev`, `testing`, `staging`, `production` and `github-pages` must allow `develop` without approval pauses. Only changing those restrictions requires owner/admin settings access. The Pages custom domain is configured in GitHub settings. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for prerequisites and monitoring requirements.
 

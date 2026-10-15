@@ -2,7 +2,24 @@ name: Check AWS environments
 
 on:
   workflow_dispatch:
+    inputs:
+      run-api-tests:
+        description: Also test encode/decode and storage using a fresh synthetic session
+        type: boolean
+        default: false
+      api-stage:
+        description: Environment for the optional live API test
+        type: choice
+        options: [test, staging]
+        default: test
   workflow_call:
+    inputs:
+      run-api-tests:
+        type: boolean
+        default: false
+      api-stage:
+        type: string
+        default: test
 
 permissions:
   contents: read
@@ -112,3 +129,125 @@ jobs:
             fi
             echo "- $stage: table/schema/TTL and bucket access/region passed." >> "$GITHUB_STEP_SUMMARY"
           done
+
+  api-tests:
+    needs: check-environments
+    if: ${{ inputs.run-api-tests }}
+    runs-on: ubuntu-24.04
+    env:
+      API_STAGE: ${{ inputs.api-stage }}
+    steps:
+      - name: Require Testing or Staging
+        run: |
+          case "$API_STAGE" in
+            test|staging) ;;
+            *) echo 'Live API tests are limited to Testing and Staging.' >&2; exit 1 ;;
+          esac
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - name: Test encode, persisted mappings, S3 archive and decode
+        run: |
+          set -euo pipefail
+          WORK_DIR=$(mktemp -d)
+          API_BASE="https://6xz841x652.execute-api.us-east-1.amazonaws.com/$API_STAGE"
+          SOURCE='Contact pipeline-demo@example.com'
+          SESSION_ID=$(cat /proc/sys/kernel/random/uuid)
+          VALUES=$(jq -nc --arg sid "$SESSION_ID" '{":sid": {S: $sid}}')
+          CONFIG=$(aws lambda get-function-configuration \
+            --function-name "poco-pii-api-handler-$API_STAGE" \
+            --query 'Environment.Variables.{stage:ENVIRONMENT,table:DYNAMODB_TABLE,bucket:S3_BUCKET}' --output json)
+          jq -e --arg stage "$API_STAGE" '.stage == $stage and
+            (.table | type == "string" and length > 0) and
+            (.bucket | type == "string" and length > 0)' <<< "$CONFIG" >/dev/null
+          TABLE=$(jq -r .table <<< "$CONFIG")
+          BUCKET=$(jq -r .bucket <<< "$CONFIG")
+
+          request() {
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 60 "$@"
+          }
+          query_session() {
+            aws dynamodb query --table-name "$TABLE" --consistent-read \
+              --key-condition-expression 'sessionId = :sid' \
+              --expression-attribute-values "$VALUES" --output json
+          }
+          cleanup() {
+            result=$?
+            trap - EXIT
+            cleared=false
+            for attempt in 1 2 3; do
+              if request -X DELETE "$API_BASE/sessions/$SESSION_ID" --output /dev/null && \
+                query_session > "$WORK_DIR/cleanup.json" && \
+                jq -e '.Count == 0' "$WORK_DIR/cleanup.json" >/dev/null; then
+                cleared=true
+                break
+              fi
+              echo "Retrying synthetic-session cleanup (attempt $attempt)."
+              sleep 2
+            done
+            if [[ "$cleared" != true ]]; then
+              echo "ERROR: Could not clear synthetic session $SESSION_ID." >&2
+              result=1
+            fi
+            if ! aws s3api delete-object --bucket "$BUCKET" \
+              --key "documents/redacted/$SESSION_ID/encode.txt" >/dev/null; then
+              echo "ERROR: Could not remove the synthetic session's archive." >&2
+              result=1
+            fi
+            if [[ "$result" == 0 ]]; then
+              echo "- $API_STAGE: API/storage integration and synthetic-data cleanup passed." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit "$result"
+          }
+          trap cleanup EXIT
+
+          echo "Checking $API_STAGE health before API integration tests."
+          request "$API_BASE/health" --output "$WORK_DIR/health.json"
+          jq -e --arg stage "$API_STAGE" '.status == "ok" and .env == $stage' \
+            "$WORK_DIR/health.json" >/dev/null
+          jq -nc --arg sid "$SESSION_ID" --arg text "$SOURCE" \
+            '{sessionId: $sid, text: $text}' > "$WORK_DIR/input.json"
+          echo 'Encoding synthetic text and checking the redacted output.'
+          request -H 'Content-Type: application/json' --data-binary "@$WORK_DIR/input.json" \
+            "$API_BASE/encode" --output "$WORK_DIR/encoded.json"
+          jq -e --arg sid "$SESSION_ID" '.sessionId == $sid and
+            .redactedText == "Contact [Email_1]" and
+            any(.mappings[]; .token == "Email_1" and .value == "pipeline-demo@example.com")' \
+            "$WORK_DIR/encoded.json" >/dev/null
+
+          echo 'Checking session mappings returned by the API.'
+          mappings_ok=false
+          for attempt in 1 2 3; do
+            request "$API_BASE/sessions/$SESSION_ID/mappings" --output "$WORK_DIR/mappings.json"
+            if jq -e --arg sid "$SESSION_ID" '.sessionId == $sid and
+              any(.mappings[]; .token == "Email_1" and .value == "pipeline-demo@example.com")' \
+              "$WORK_DIR/mappings.json" >/dev/null; then
+              mappings_ok=true
+              break
+            fi
+            echo "Waiting for mappings (attempt $attempt)."
+            sleep 2
+          done
+          [[ "$mappings_ok" == true ]]
+          echo 'Reading the synthetic session directly from DynamoDB.'
+          query_session > "$WORK_DIR/stored.json"
+          jq -e 'any(.Items[]; .token.S == "Email_1" and
+            .value.S == "pipeline-demo@example.com" and (.expiresAt.N | tonumber) > now)' \
+            "$WORK_DIR/stored.json" >/dev/null
+          echo 'Comparing the actual S3 archive with the redacted API output.'
+          jq -j .redactedText "$WORK_DIR/encoded.json" > "$WORK_DIR/expected.txt"
+          aws s3 cp "s3://$BUCKET/documents/redacted/$SESSION_ID/encode.txt" \
+            "$WORK_DIR/archive.txt" --only-show-errors
+          cmp "$WORK_DIR/expected.txt" "$WORK_DIR/archive.txt"
+
+          echo 'Decoding and checking the original synthetic text is restored.'
+          jq --arg sid "$SESSION_ID" '{sessionId: $sid, text: .redactedText}' \
+            "$WORK_DIR/encoded.json" > "$WORK_DIR/decode-input.json"
+          request -H 'Content-Type: application/json' --data-binary "@$WORK_DIR/decode-input.json" \
+            "$API_BASE/decode" --output "$WORK_DIR/decoded.json"
+          jq -e --arg sid "$SESSION_ID" --arg text "$SOURCE" \
+            '.sessionId == $sid and .restoredText == $text and .hallucinations == []' \
+            "$WORK_DIR/decoded.json" >/dev/null

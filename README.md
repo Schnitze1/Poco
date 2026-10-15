@@ -21,7 +21,7 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | `.github/workflows/deploy.yml` | Automatic delivery from develop through all environments |
 | `.github/workflows/ci.yml` | Shared backend tests and frontend tests/lint/build |
 | `.github/workflows/deploy-environment.yml` | Shared Lambda deployment, package/configuration checks and health checks |
-| `.github/workflows/test-aws.yml` | Read-only AWS readiness checks, also called before deployment |
+| `.github/workflows/test-aws.yml` | AWS readiness checks and optional Testing/Staging API integration tests |
 
 ---
 
@@ -77,7 +77,7 @@ feature/* → PR → develop
          Verify the website and release metadata
 ```
 
-Every environment must pass package/configuration and API health checks before the next deployment starts. The same Lambda ZIP is reused throughout. Failed checks stop promotion; failure after publication reports a failed release and does not automatically roll back.
+Every environment must pass package/configuration and API health checks before the next deployment starts. Testing and Staging also run live encode/decode and DynamoDB/S3 integration tests before promotion. The same Lambda ZIP is reused throughout. Failed checks stop promotion; failure after publication reports a failed release and does not automatically roll back.
 
 `develop` is the deployment source. The new workflow does not deploy independently from `test/qa`, `release/**` or `main`, and automatic delivery does not merge code into those branches. Branches retaining older workflows still have their previous behaviour. Branch protections remain optional; the team reviews PRs before merging into `develop`.
 
@@ -85,7 +85,7 @@ Complete the cloud setup and verify any existing GitHub environment restrictions
 
 AWS Academy Learner Lab uses `us-east-1`, the existing `LabRole`, and temporary credentials in GitHub secrets. Credentials must be valid for the entire run and renewed when they expire.
 
-Automated deployed integration and browser acceptance tests are not currently included. These remain required for the project specification; health checks alone do not prove application or storage behaviour.
+Live API/storage integration tests run in Testing and Staging. Automated browser end-to-end acceptance tests remain required for the project specification and are not currently included.
 
 Setup, monitoring requirements and recording steps: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 

@@ -73,3 +73,12 @@ jobs:
           done
           echo "Health failed for $API_STAGE" >&2
           exit 1
+
+  integration-tests:
+    needs: deploy-and-verify
+    if: ${{ inputs.stage == 'test' || inputs.stage == 'staging' }}
+    uses: ./.github/workflows/test-aws.yml
+    with:
+      run-api-tests: true
+      api-stage: ${{ inputs.stage }}
+    secrets: inherit
