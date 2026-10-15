@@ -79,7 +79,7 @@ feature/* → PR → develop
          Verify the website and release metadata
 ```
 
-Every environment must pass package/configuration and API health checks before the next deployment starts. Testing and Staging also run live encode/decode and DynamoDB/S3 integration tests before promotion. The same Lambda ZIP is reused throughout. Failed checks stop promotion; failure after publication reports a failed release and does not automatically roll back.
+Every environment must pass package/configuration and API health checks before the next deployment starts. Testing and Staging also run live encode/decode, DynamoDB/S3 integration and Chromium browser acceptance before promotion. The same Lambda ZIP is reused throughout. Failed checks stop promotion; failure after publication reports a failed release and does not automatically roll back.
 
 `develop` is the deployment source. The new workflow does not deploy independently from `test/qa`, `release/**` or `main`, and automatic delivery does not merge code into those branches. Branches retaining older workflows still have their previous behaviour. Branch protections remain optional; the team reviews PRs before merging into `develop`.
 
@@ -87,7 +87,7 @@ Complete the cloud setup and verify any existing GitHub environment restrictions
 
 AWS Academy Learner Lab uses `us-east-1`, the existing `LabRole`, and temporary credentials in GitHub secrets. Credentials must be valid for the entire run and renewed when they expire.
 
-Live API/storage integration tests run in Testing and Staging. Automated browser end-to-end acceptance tests remain required for the project specification and are not currently included.
+Live API/storage integration and browser acceptance run in Testing and Staging. Browser tests exercise Encode → Vault → refresh → Decode and the unknown-token warning, with screenshots and traces retained as evidence.
 
 Production monitoring uses Lambda Insights and the `Poco-Production` CloudWatch dashboard. The existing AWS workflow can configure it before merging; delivery verifies it again before website publication.
 

@@ -27,11 +27,11 @@ The delivery workflow is `.github/workflows/deploy.yml`. It triggers on pushes t
 2. Call the shared read-only `test-aws.yml` workflow. Check all four Lambda runtime/role/storage configurations, API stage variables, distinct table/bucket names, actual DynamoDB table schemas/TTL and S3 bucket access/region before changing code.
 3. Build Lambda once in `amazonlinux:2023`, validate its executable/glibc compatibility and save `bootstrap.zip` as an artifact.
 4. Deploy that ZIP to Development, then Testing, then Staging, then Production. Each stage calls the shared `deploy-environment.yml` and waits for the previous stage to pass.
-5. At each stage, check the deployed Lambda package hash and configuration, then verify `/health` returns HTTP 200, `status: ok` and the expected environment identity. After Testing and Staging deployment, rerun readiness checks and test encode, API session mappings, actual DynamoDB persistence/expiry, S3 archive content and decode. Both environments must pass these integration tests before promotion.
+5. At each stage, check the deployed Lambda package hash and configuration, then verify `/health` returns HTTP 200, `status: ok` and the expected environment identity. After Testing and Staging deployment, rerun readiness checks and test encode, API session mappings, actual DynamoDB persistence/expiry, S3 archive content and decode. Then build the frontend for that API stage and run Chromium acceptance for Encode → Vault → refresh → Decode plus an unknown-token warning. Both environments must pass integration and browser acceptance before promotion.
 6. After production backend health verification passes, enable/verify production Lambda Insights, wait for CPU/memory/disk/network/HTTP metric samples and create/update the production dashboard. Then publish the validated production frontend through GitHub Pages. Check `deployment.json` identifies the workflow commit and production stage, and check the public website is reachable.
 7. Keep the Lambda artifact for seven days. Save workflow logs and screenshots as evidence for the report.
 
-All deployment orchestration stays in YAML; there are no pipeline helper shell scripts or Playwright tests. Development, Testing and Staging have persistent API/storage runtimes in AWS, but this workflow does not publish frontend sites for them. Only Production has a public Pages site (`littlepoco.me`). The Lambda package is identical across environments.
+Deployment orchestration and live acceptance checks stay in YAML; there are no pipeline helper scripts or separate E2E spec/config files. Browser acceptance uses the Playwright library in an inline Node script. Development, Testing and Staging have persistent API/storage runtimes in AWS, but this workflow does not publish frontend sites for them. Only Production has a public Pages site (`littlepoco.me`). The Lambda package is identical across environments.
 
 Failed CI, readiness, health, API integration or monitoring checks prevent subsequent stages. A failure after production has already changed marks the run failed but does not roll back deployed code. Backend and frontend updates are separate operations; this pipeline does not promise an atomic release.
 
@@ -76,7 +76,15 @@ gh workflow run test-aws.yml --repo Schnitze1/Poco --ref feature/cicd-readiness 
 
 The default invocation remains read-only. With `run-api-tests=true`, the workflow first verifies all four environments, then creates one fresh synthetic session in the selected Testing or Staging API. It checks email redaction, API mappings, a directly queried DynamoDB item and its expiry, actual S3 archive content and decode restoration. Cleanup runs on normal completion or test failure: it deletes that session through the API, checks its table items are gone and deletes only its archive object. A test or cleanup failure fails the job. The API test is restricted to `test` and `staging`.
 
-Deployment reuses this test after updating Testing and Staging. Feature-branch diagnostic runs test the currently deployed code; only the delivery run after a merge verifies the newly deployed candidate. Neither invocation deploys code by itself. Browser interactions remain a separate requirement. Production monitoring is configured using the optional mode below.
+Deployment reuses this test after updating Testing and Staging. Feature-branch diagnostic runs test the currently deployed code; only the delivery run after a merge verifies the newly deployed candidate. Neither invocation deploys code by itself. The same job builds and serves the candidate frontend on the runner and runs Chromium against that API. It checks redaction, vault contents, session persistence after refresh, decode restoration and the visible unknown-token warning. It reuses only its own synthetic session, so the same cleanup removes the API and browser writes. Production monitoring is configured using the optional mode below.
+
+Browser evidence is uploaded as `browser-acceptance-test` or `browser-acceptance-staging` for seven days. It includes success/failure screenshots, preview logs and a Playwright trace. Download before expiry; inspect a trace locally from `web/` with:
+
+```sh
+npx playwright show-trace /path/to/trace.zip
+```
+
+The preview runs a production frontend build connected directly to the real stage API, so the browser checks also exercise CORS and network integration. Screenshots/traces contain synthetic test data. A failed browser assertion, page error or API error fails the job and stops promotion.
 
 ## Assignment coverage and remaining evidence
 
@@ -84,7 +92,7 @@ Deployment reuses this test after updating Testing and Staging. Feature-branch d
 |---|---|---|
 | Level 1: four environments | Separate Lambda/API stages and storage, validated before delivery | AWS configuration and isolation screenshots |
 | Level 2: production instrumentation/monitoring | Automated Lambda Insights setup, metric ingestion checks and the Poco-Production CloudWatch dashboard | A successful monitoring run plus populated dashboard screenshots under real traffic |
-| Level 3: automated unit, integration and end-to-end tests before production | Shared Rust/Vitest CI plus live API/DynamoDB/S3 integration gates in Testing/Staging; browser acceptance tests are missing | Add automated browser acceptance coverage before claiming completion, then verify the public app/database |
+| Level 3: automated unit, integration and end-to-end tests before production | Rust/Vitest CI plus live API/DynamoDB/S3 integration and Chromium acceptance gates in Testing/Staging | Successful cloud runs, browser screenshots/traces and public app/database verification |
 | Level 4: automatic trigger-to-production workflow | A `develop` push starts the full chain with no further branch merges | A visible feature change progressing through one successful run to the published website |
 
 ## Production monitoring checkpoint
@@ -109,10 +117,10 @@ The application log group is `/aws/lambda/poco-pii-api-handler`; enhanced perfor
 1. Show the four runtime/storage environments and production dashboard; open the current public app.
 2. Make a small visible UI change on a feature branch and show its PR CI results.
 3. Merge the PR into `develop`. Follow the resulting **Deploy** run through CI, preflight, package, Development, Testing, Staging, Production and Pages publication without manual environment promotions.
-4. Show Testing/Staging readiness, health and live API/storage integration checks passed before production started, and show the same Lambda artifact/hash being reused. Once browser acceptance tests are added, show their results too.
+4. Show Testing/Staging readiness, health, live API/storage integration and browser acceptance passed before production started. Open their screenshot/trace artifacts and show the same Lambda artifact/hash being reused.
 5. Open the public website, show the visible change and demonstrate Encode → Vault → Decode. Show the final public-site check verifies the same commit.
 6. Show fresh production metrics/logs and save screenshots, logs and test reports for the final report. If a failure is demonstrated, show that later stages are skipped.
 
-The live API integration tests verify encode/decode and actual DynamoDB/S3 persistence using synthetic data. Automated browser end-to-end acceptance tests against Testing remain necessary to fulfil Level 3; Level 4 also requires all prior levels. Manually demonstrate encode/decode, vault edits and actual DynamoDB/S3 data as supplementary evidence.
+The live API integration and Chromium acceptance tests verify the core encode/vault/decode flow and actual DynamoDB/S3 persistence using synthetic data. Browser coverage is currently desktop Chromium and the core text flow; it does not cover uploads, every UI action or other browsers. Manually demonstrate additional features and actual DynamoDB/S3 data as supplementary evidence.
 
 The prepared workflows and local validation are not a substitute for this successful live demonstration. Run and verify the complete cloud pipeline before recording.
