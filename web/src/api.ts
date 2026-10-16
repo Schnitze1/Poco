@@ -154,7 +154,8 @@ export async function upsertMapping(
   sessionId: string,
   mapping: { token: string; value: string; category?: string }
 ): Promise<{ sessionId: string; mapping: Mapping }> {
-  return request('PUT', `/sessions/${sessionId}/mappings`, mapping)
+  // The existing API Gateway preflight permits POST for browser writes.
+  return request('POST', `/sessions/${sessionId}/mappings`, mapping)
 }
 
 export async function deleteMapping(sessionId: string, token: string): Promise<void> {

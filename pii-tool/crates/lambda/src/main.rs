@@ -488,7 +488,7 @@ pub async fn route(method: &str, path: &str, body: &str) -> Response<String> {
         return json_response(200, body);
     }
 
-    if method == "PUT" && segment == "mappings" {
+    if (method == "POST" || method == "PUT") && segment == "mappings" {
         let session_id = match session_id_from_path(path) {
             Some(s) => s,
             None => {
