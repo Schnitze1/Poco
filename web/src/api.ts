@@ -3,6 +3,7 @@ export type Mapping = {
   value: string
   category: string
   firstOffset: number
+  sourceValue?: string
 }
 
 export type EncodeResult = {
@@ -53,10 +54,12 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 export async function encodeText(
   sessionId: string | null,
   text: string,
-  file?: { fileName: string; fileBase64?: string; s3Key?: string }
+  file?: { fileName: string; fileBase64?: string; s3Key?: string },
+  manualMappings: Mapping[] = [],
 ): Promise<EncodeResult> {
   const body: Record<string, unknown> = {}
   if (sessionId) body.sessionId = sessionId
+  if (manualMappings.length) body.manualMappings = manualMappings.map(({ token, value, sourceValue }) => ({ token, value, sourceValue }))
   if (file?.s3Key) {
     body.fileName = file.fileName
     body.s3Key = file.s3Key

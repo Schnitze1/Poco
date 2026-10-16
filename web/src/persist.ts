@@ -14,6 +14,7 @@ export type PersistedDoc = {
   unknown: string[]
   mappings: { token: string; value: string; category: string; firstOffset: number }[]
   nextIdx: Record<string, number>
+  manualMappings?: { token: string; value: string; category: string; firstOffset: number; sourceValue?: string }[]
 }
 
 export type PersistedState = {

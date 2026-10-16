@@ -92,6 +92,9 @@ Redact PII in free text and store mappings under `sessionId`.
 |---|---|---|---|
 | `sessionId` | string | no | Session id to store/merge mappings into. Omitted → server returns a new UUID. |
 | `text` | string | yes | Raw document text (not file upload in v1). |
+| `manualMappings` | array | no | Literal, case-sensitive redaction rules: `{token, value, sourceValue?}`. `sourceValue` retains the original text when its decode value is edited. |
+
+Manual rules are applied before mappings and the redacted S3 archive are stored. Re-send the document's rules on later Encode requests to retain them. Tokens must have a class and positive numeric suffix, such as `Custom_1`; tokens and source values must be unique. Invalid rules return HTTP 400. Automatic tokens are renumbered when needed to avoid collisions.
 
 **200**
 
@@ -250,7 +253,7 @@ Non-2xx responses:
 API Gateway must allow:
 
 * `Origin`: your CloudFront/site origin (and `http://localhost:*` for dev)
-* `Methods`: `GET`, `POST`, `DELETE`, `OPTIONS`
+* `Methods`: `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`
 * `Headers`: `Content-Type`
 * `Access-Control-Allow-Origin` echoed as appropriate (lab: `*` is acceptable if cookies are unused)
 
