@@ -17,17 +17,19 @@ npm run lint
 npm run build
 ```
 
-`npm run test:ci` runs the colocated Vitest tests once using jsdom. It uses the plain-text TAP reporter: each test has an `ok` or `not ok` result without decorative status symbols. GitHub Actions captures this output under **frontend-checks → Run frontend tests**; there is currently no separate HTML report or coverage report. `npm test` starts watch mode. The persistence tests cover empty storage, workspace restoration, clearing an old session, and malformed stored JSON.
+`npm run test:ci` runs the colocated Vitest tests once using jsdom. It uses the plain-text TAP reporter: each test has an `ok` or `not ok` result without decorative status symbols. GitHub Actions captures this output under **Frontend checks → Run frontend tests**; there is currently no separate HTML report or coverage report. `npm test` starts watch mode. The persistence tests cover empty storage, workspace restoration, clearing an old session, and malformed stored JSON.
 
 The shared `.github/workflows/ci.yml` runs locked Rust tests plus frontend tests, lint and build on implementation-branch pushes and pull requests. These checks use in-memory backend storage and do not prove live AWS behaviour.
 
-Merging into `develop` starts automatic delivery through Development, Testing, Staging and Production. The workflow builds one Lambda ZIP and reuses it across all environments. Each deployment must pass package/configuration and API health checks before the next environment starts. Testing and Staging also require live API/storage integration and Chromium browser acceptance to pass before promotion. Pipeline commands stay inside YAML workflows.
+Merging into `main` starts automatic delivery through Development, Testing, Staging and Production. The workflow builds one Lambda ZIP and reuses it across all environments. Each deployment must pass package/configuration and API health checks before the next environment starts. Testing and Staging also require live API/storage integration and Chromium browser acceptance to pass before promotion. Pipeline commands stay inside YAML workflows.
 
 CI prepares the production Pages artifact with `VITE_API_STAGE=prod` and commit metadata. After production backend health and monitoring checks pass, the workflow publishes that artifact and checks the public website is reachable and its release metadata matches the workflow commit.
 
 The Testing and Staging deployment jobs run the API/storage and browser checks as steps before allowing promotion. They test encode/decode against the deployed APIs, read the synthetic mapping directly from DynamoDB and compare the actual S3 archive with the redacted output. Chromium then checks Encode → Vault → refresh → Decode and the unknown-token warning against the same API. Cleanup deletes the job's session mappings and archive after both API and browser checks, verifying the table has no remaining items for that session. Screenshots/traces are saved as artifacts. Tests stay inline in YAML; no separate E2E spec/config file is required. Coverage is the core text flow in desktop Chromium; uploads and other browsers remain outside this suite.
 
-Branch protections are optional. Missing GitHub environments are created automatically without reviewers or environment secrets; the workflow uses repository AWS secrets. Existing restrictions on `dev`, `testing`, `staging`, `production` and `github-pages` must allow `develop` without approval pauses. Only changing those restrictions requires owner/admin settings access. The Pages custom domain is configured in GitHub settings. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for prerequisites and monitoring requirements.
+Branch protections are optional. Missing GitHub environments are created automatically without reviewers or environment secrets; the workflow uses repository AWS secrets. Existing restrictions on `dev`, `testing`, `staging`, `production` and `github-pages` must allow `main` without approval pauses. Only changing those restrictions requires owner/admin settings access. The Pages custom domain is configured in GitHub settings. See [`../docs/ENVIRONMENTS.md`](../docs/ENVIRONMENTS.md) for prerequisites and monitoring requirements.
+
+`main` is the single trunk. Keep feature branches short-lived and target `main` in PRs; the deployment workflow promotes the same commit through all four environments. Older environment branches are retained for history.
 
 ## API configuration
 

@@ -18,7 +18,7 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | `pii-tool/test_data/` | PDF/DOCX/TXT fixtures for the gold suite |
 | `docs/API.md` | HTTP API contract for the website client |
 | `docs/ENVIRONMENTS.md` | Environment setup, automatic delivery and demo checklist |
-| `.github/workflows/deploy.yml` | Automatic delivery from develop through all environments |
+| `.github/workflows/deploy.yml` | Automatic delivery from main through all environments |
 | `.github/workflows/ci.yml` | Shared backend tests and frontend tests/lint/build |
 | `.github/workflows/deploy-environment.yml` | Shared Lambda deployment, health and Testing/Staging acceptance checks |
 | `.github/workflows/test-aws.yml` | Read-only AWS readiness checks before delivery |
@@ -57,10 +57,10 @@ file / paste text
 
 ## Deployment
 
-Merging a feature PR into `develop` starts the complete pipeline:
+Merging a feature PR into `main` starts the complete pipeline:
 
 ```text
-feature/* → PR → develop
+feature/* → PR → main (trunk)
                     ↓
           CI tests, lint and build
                     ↓
@@ -81,9 +81,11 @@ feature/* → PR → develop
 
 Every environment must pass package/configuration and API health checks before the next deployment starts. Testing and Staging also run live encode/decode, DynamoDB/S3 integration and Chromium browser acceptance before promotion. The same Lambda ZIP is reused throughout. Failed checks stop promotion; failure after publication reports a failed release and does not automatically roll back.
 
-`develop` is the deployment source. The new workflow does not deploy independently from `test/qa`, `release/**` or `main`, and automatic delivery does not merge code into those branches. Branches retaining older workflows still have their previous behaviour. Branch protections remain optional; the team reviews PRs before merging into `develop`.
+`main` is the single trunk and deployment source. Work in small changes on short-lived branches, review the PR and merge frequently into `main`. Environments are deployment targets, so no additional branch merges are needed for promotion. This follows [DORA's trunk-based development guidance](https://dora.dev/capabilities/trunk-based-development/).
 
-Complete the cloud setup and verify any existing GitHub environment restrictions before merging this workflow into `develop`: that merge will start automatic delivery to production. Missing GitHub environments are created automatically when referenced; manual environment setup is optional. All deployment environments, including `github-pages`, must allow `develop` without required reviewers. The production website uses the existing Pages custom domain `littlepoco.me`.
+`develop`, `test/qa` and `release/**` are retained as historical branches, not active integration or promotion branches. Do not push to them for a release: branches retaining older workflows can still trigger their previous deployment behaviour. Branch protections remain optional; the team checks CI and reviews PRs before merging into `main`.
+
+Complete the cloud setup and verify any existing GitHub environment restrictions before merging this workflow into `main`: that merge will start automatic delivery to production. Missing GitHub environments are created automatically when referenced; manual environment setup is optional. All deployment environments, including `github-pages`, must allow `main` without required reviewers. The production website uses the existing Pages custom domain `littlepoco.me`.
 
 AWS Academy Learner Lab uses `us-east-1`, the existing `LabRole`, and temporary credentials in GitHub secrets. Credentials must be valid for the entire run and renewed when they expire.
 
@@ -91,7 +93,7 @@ Live API/storage integration and browser acceptance run in Testing and Staging. 
 
 Production monitoring uses Lambda Insights and the `Poco-Production` CloudWatch dashboard. A dedicated monitoring job configures and verifies it after Production deployment and before website publication.
 
-Setup, monitoring requirements and recording steps: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
+Setup and monitoring requirements: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 
 ---
 
@@ -119,7 +121,8 @@ Encode creates a **new vault per request** and writes mappings under a session I
 
 ## Known limitations
 
-- Bare person names (no title/cue) are unreliable — Vault manual mapping is the workaround  
+- Bare person names (no title/cue) are unreliable; review the redacted output before use.
+- Manual Vault editing/redaction has a reported issue. The acceptance suite covers reading mappings, not adding or editing them.
 - PDF extract: CJK glyphs may be lost; line order may not match the logical document  
 - Scanned/image-only PDFs are out of scope (`NoTextLayer`)  
 - Card expiry/CVV and product codes/versions are intentionally not redacted  

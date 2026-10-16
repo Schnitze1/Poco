@@ -2,7 +2,7 @@ name: Deploy
 
 on:
   push:
-    branches: [develop]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -18,10 +18,10 @@ jobs:
     name: Source branch
     runs-on: ubuntu-24.04
     steps:
-      - name: Require the development integration branch
+      - name: Require the main trunk
         run: |
-          if [[ "$GITHUB_REF" != refs/heads/develop ]]; then
-            echo 'Run delivery from develop.' >&2
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo 'Run delivery from main.' >&2
             exit 1
           fi
 

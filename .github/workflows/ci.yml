@@ -2,15 +2,12 @@ name: CI
 
 on:
   push:
-    # A develop push starts the delivery workflow, which calls this CI.
+    # A main push starts the delivery workflow, which calls this CI.
     branches-ignore:
-      - develop
+      - main
   pull_request:
     branches:
-      - develop
       - main
-      - test/qa
-      - 'release/**'
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -28,6 +25,7 @@ permissions:
 
 jobs:
   backend-tests:
+    name: Backend tests
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -46,6 +44,7 @@ jobs:
         run: cargo test --locked --workspace -- --test-threads=1
 
   frontend-checks:
+    name: Frontend checks
     runs-on: ubuntu-24.04
     defaults:
       run:
