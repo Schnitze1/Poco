@@ -280,9 +280,11 @@ function App() {
           await upsertMapping(sid, { token: next.token, value: next.value, category: next.category })
         }
       }
-      const manualMappings = (document.manualMappings ?? []).flatMap(rule => {
-        const updated = mappings.find(mapping => mapping.token === rule.token)
-        return updated ? [{ ...updated, sourceValue: rule.sourceValue ?? rule.value }] : []
+      const manualMappings = mappings.flatMap(mapping => {
+        const rule = document.manualMappings?.find(entry => entry.token === mapping.token)
+        const before = document.mappings.find(entry => entry.token === mapping.token)
+        if (!rule && before?.value === mapping.value) return []
+        return [{ ...mapping, sourceValue: rule?.sourceValue ?? rule?.value ?? before?.value ?? mapping.value }]
       })
       updateDocument(document.id, {
         mappings, manualMappings,
