@@ -11,13 +11,17 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | Path | What it is |
 |---|---|
 | `pii-tool/` | Cargo workspace (core engine, CLI, Lambda handler) |
+| `web/` | React/TypeScript frontend with API integration and persistence tests |
 | `pii-tool/crates/core` | `pii-core` — extract, detect, encode/decode (gold-tested) |
 | `pii-tool/crates/cli` | Interactive CLI (`cargo run -p pii-cli`) |
 | `pii-tool/crates/lambda` | `poco-lambda` — AWS Lambda HTTP API |
 | `pii-tool/test_data/` | PDF/DOCX/TXT fixtures for the gold suite |
 | `docs/API.md` | HTTP API contract for the website client |
-| `docs/ENVIRONMENTS.md` | dev / test / staging / prod deploy map |
-| `.github/workflows/deploy.yml` | CI: tests → AL2023 Lambda build → deploy → smoke |
+| `docs/ENVIRONMENTS.md` | Environment setup, automatic delivery and demo checklist |
+| `.github/workflows/deploy.yml` | Automatic delivery from main through all environments |
+| `.github/workflows/ci.yml` | Shared backend tests and frontend tests/lint/build |
+| `.github/workflows/deploy-environment.yml` | Shared Lambda deployment, health and Testing/Staging acceptance checks |
+| `.github/workflows/test-aws.yml` | Read-only AWS readiness checks before delivery |
 
 ---
 
@@ -47,24 +51,49 @@ file / paste text
 
 - Detection is **rules-based** (gaze-pii + `poc_extra.toml`), not a neural NER.
 - Tokens are reversible; mappings must never be written to disk in the Lambda.
-- HTTP API is **paste-text only** in v1 — extract files on the client or CLI first.
+- The website extracts TXT/MD/PDF in the browser and uses the API for DOCX extraction. The backend also supports uploaded file bytes and S3 keys.
 
 ---
 
 ## Deployment
 
-| Trigger | Environment | Lambda | API stage |
-|---|---|---|---|
-| push `develop` | dev | `poco-pii-api-handler-dev` | `/dev` |
-| push `test/**` | test | `poco-pii-api-handler-test` | `/test` |
-| push `release/**` | staging | `poco-pii-api-handler-staging` | `/staging` |
-| push `main` | prod | `poco-pii-api-handler` | `/prod` |
+Merging a feature PR into `main` starts the complete pipeline:
 
-**Do not push `main` until production is deliberately ready.**
+```text
+feature/* → PR → main (trunk)
+                    ↓
+          CI tests, lint and build
+                    ↓
+        Verify environment isolation
+                    ↓
+          Build one Lambda package
+                    ↓
+       Development → Testing → Staging
+                    ↓
+            Production backend
+                    ↓
+          Verify production monitoring
+                    ↓
+          Publish production website
+                    ↓
+         Verify the website and release metadata
+```
 
-AWS Academy Learner Lab constraints: `us-east-1` only, `LabRole` only (no custom IAM/OIDC), static credentials in GitHub secrets (refresh ~every 4 hours).
+Every environment must pass package/configuration and API health checks before the next deployment starts. Testing and Staging also run live encode/decode, DynamoDB/S3 integration and Chromium browser acceptance before promotion. The same Lambda ZIP is reused throughout. Failed checks stop promotion; failure after publication reports a failed release and does not automatically roll back.
 
-More detail: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
+`main` is the single trunk and deployment source. Work in small changes on short-lived branches, review the PR and merge frequently into `main`. Environments are deployment targets, so no additional branch merges are needed for promotion. This follows [DORA's trunk-based development guidance](https://dora.dev/capabilities/trunk-based-development/).
+
+`develop`, `test/qa` and `release/**` are retained as historical branches, not active integration or promotion branches. Do not push to them for a release: branches retaining older workflows can still trigger their previous deployment behaviour. Branch protections remain optional; the team checks CI and reviews PRs before merging into `main`.
+
+Complete the cloud setup and verify any existing GitHub environment restrictions before merging this workflow into `main`: that merge will start automatic delivery to production. Missing GitHub environments are created automatically when referenced; manual environment setup is optional. All deployment environments, including `github-pages`, must allow `main` without required reviewers. The production website uses the existing Pages custom domain `littlepoco.me`.
+
+AWS Academy Learner Lab uses `us-east-1`, the existing `LabRole`, and temporary credentials in GitHub secrets. Credentials must be valid for the entire run and renewed when they expire.
+
+Live API/storage integration and browser acceptance run in Testing and Staging. Browser tests exercise Encode → Vault → refresh → Decode and the unknown-token warning, with screenshots and traces retained as evidence.
+
+Production monitoring uses Lambda Insights and the `Poco-Production` CloudWatch dashboard. A dedicated monitoring job configures and verifies it after Production deployment and before website publication.
+
+Setup and monitoring requirements: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 
 ---
 
@@ -72,11 +101,11 @@ More detail: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 
 Base (dev): `https://6xz841x652.execute-api.us-east-1.amazonaws.com/dev`
 
-| Method | Path | Status |
+| Method | Path | Implemented behaviour |
 |---|---|---|
-| GET | `/health` | Ready |
-| POST | `/encode` | Ready — `{ "text": "..." }` → redacted + mappings |
-| POST | `/decode` | **501** — needs DynamoDB sessions |
+| GET | `/health` | Liveness and environment identity |
+| POST | `/encode` | `{ "text": "..." }` → session ID, redacted text and mappings |
+| POST | `/decode` | `{ "sessionId": "...", "text": "..." }` → restored text and unknown tokens |
 
 Full contract: [`docs/API.md`](docs/API.md).
 
@@ -84,15 +113,16 @@ Full contract: [`docs/API.md`](docs/API.md).
 
 ## Session / persistence (current)
 
-Encode creates a **new vault per request**. Nothing is stored server-side yet.  
-DynamoDB `pii-sessions-*` tables exist; wiring them is the next backend task.  
-Until then the frontend should keep `mappings` in `localStorage` if it needs to survive a refresh.
+Encode creates a **new vault per request** and writes mappings under a session ID. With `DYNAMODB_TABLE` configured, encode/decode and vault edits use DynamoDB; without it, sessions use process memory. The frontend also stores its workspace and session ID in browser local storage.
+
+`S3_BUCKET` enables optional upload/redacted-text storage. Redacted-text archiving is best effort, so encode success alone does not prove an S3 write succeeded. Verify the live resources and encode/decode flow for each environment before the demonstration.
 
 ---
 
 ## Known limitations
 
-- Bare person names (no title/cue) are unreliable — Vault manual mapping is the workaround  
+- Bare person names (no title/cue) are unreliable; review the redacted output before use.
+- Manual Vault editing/redaction has a reported issue. The acceptance suite covers reading mappings, not adding or editing them.
 - PDF extract: CJK glyphs may be lost; line order may not match the logical document  
 - Scanned/image-only PDFs are out of scope (`NoTextLayer`)  
 - Card expiry/CVV and product codes/versions are intentionally not redacted  

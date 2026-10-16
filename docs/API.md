@@ -1,7 +1,7 @@
 # PII Vault API (v1) 
 
 Runtime: AWS Lambda (Rust) behind API Gateway, **us-east-1**, AWS Academy Learner Lab.  
-Session store: DynamoDB table `pii-sessions` (LabRole — no custom IAM).
+Session store: DynamoDB table `poco-pii-sessions-{env}` (LabRole — no custom IAM).
 
 All request/response bodies are JSON (`Content-Type: application/json`).  
 All timestamps are **Unix epoch seconds** (numbers).  
@@ -21,17 +21,18 @@ A **session** holds the encode/decode mapping for one document / chat turn.
 
 | Field | Type | Notes |
 |---|---|---|
-| `sessionId` | string | Client-generated UUID (or any opaque id). Required on every call. |
+| `sessionId` | string | Opaque id (UUID recommended). Optional on `/encode` — server generates one if omitted. Required on `/decode` and session routes. |
 | `token` | string | Readable token class, e.g. `Email_1`, `Iban_1`, `Date_2`. |
 | `value` | string | Original PII value. |
 | `category` | string | Detector class family: `Email`, `Name`, `Phone`, `Date`, `Location`, `Ssn`, `Iban`, `CreditCard`, `IpAddress`, … |
+| `firstOffset` | number | Byte offset of first occurrence in the source text (display sort key). |
 | `expiresAt` | number | Epoch seconds. DynamoDB TTL (24h / 86400s from write). |
 
-DynamoDB `pii-sessions`:
+DynamoDB `poco-pii-sessions-{env}` (table name from `DYNAMODB_TABLE`):
 
 * Partition key: `sessionId` (S)
 * Sort key: `token` (S)
-* Attributes: `value` (S), `category` (S), `expiresAt` (N, TTL enabled)
+* Attributes: `value` (S), `category` (S), `firstOffset` (N), `expiresAt` (N, TTL enabled)
 
 Do **not** add extra session APIs without updating this doc.
 
@@ -44,8 +45,33 @@ Liveness. No auth, no body.
 **200**
 
 ```json
-{ "ok": true }
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "env": "dev",
+  "path": "/dev/health"
+}
 ```
+
+---
+
+## `POST /api/v1/extract`
+
+Extract text from an uploaded **.txt / .md / .pdf / .docx** file (base64).
+
+**Request**
+
+```json
+{ "fileName": "report.pdf", "fileBase64": "JVBERi0xLjQK…" }
+```
+
+**200**
+
+```json
+{ "fileName": "report.pdf", "text": "Extracted plain text…" }
+```
+
+**400** missing fields, bad base64, or unsupported/scanned format.
 
 ---
 
@@ -64,7 +90,7 @@ Redact PII in free text and store mappings under `sessionId`.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `sessionId` | string | yes | Session id to store/merge mappings into. |
+| `sessionId` | string | no | Session id to store/merge mappings into. Omitted → server returns a new UUID. |
 | `text` | string | yes | Raw document text (not file upload in v1). |
 
 **200**
@@ -86,7 +112,8 @@ Redact PII in free text and store mappings under `sessionId`.
       "category": "Email",
       "firstOffset": 35
     }
-  ]
+  ],
+  "stats": { "totalEntities": 2, "durationMs": 12 }
 }
 ```
 
@@ -94,7 +121,7 @@ Redact PII in free text and store mappings under `sessionId`.
 * Same `sessionId` reuses tokens for the same value (session accumulation).
 * Website should render `redactedText` and show the mapping table in this order.
 
-**400** missing/invalid `sessionId` or `text`.
+**400** missing/invalid `text` (or non-empty invalid JSON).
 
 ---
 
@@ -148,6 +175,43 @@ List all mappings for a session, first-appearance order.
 Empty session → `"mappings": []`.
 
 **400** missing `sessionId` path segment.
+
+---
+
+## `PUT /api/v1/sessions/{sessionId}/mappings`
+
+Insert or replace one mapping (Vault edit / add token).
+
+**Request**
+
+```json
+{ "token": "Email_1", "value": "s.mitchell@university.edu", "category": "Email" }
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `token` | string | yes | Readable token class (`Email_1`, `Custom_2`, …). |
+| `value` | string | yes | Original value to restore on decode (may be empty). |
+| `category` | string | no | Defaults to a class-derived label. |
+
+**200**
+
+```json
+{
+  "sessionId": "3f2c9a1e-…",
+  "mapping": { "token": "Email_1", "value": "s.mitchell@university.edu", "category": "Email" }
+}
+```
+
+**400** missing `sessionId` or `token`.
+
+---
+
+## `DELETE /api/v1/sessions/{sessionId}/mappings/{token}`
+
+Remove one mapping. Idempotent.
+
+**204** no body. After this, that token decodes as a hallucination.
 
 ---
 
@@ -237,5 +301,5 @@ async function decode(sessionId, text) {
 
 * Region is **hardcoded `us-east-1`**.
 * Lambda execution role is the pre-existing **`LabRole`** — never create IAM roles or OIDC providers.
-* DynamoDB `pii-sessions` TTL on `expiresAt` = **86400 seconds** (24h).
+* DynamoDB `poco-pii-sessions-{env}` TTL on `expiresAt` = **86400 seconds** (24h).
 * CI deploys with **static** `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` GitHub secrets only.

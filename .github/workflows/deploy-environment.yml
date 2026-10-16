@@ -1,0 +1,302 @@
+name: Deploy and verify environment
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      lambda:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-and-verify:
+    name: Deploy and verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: ${{ inputs.environment }}
+      url: https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ inputs.stage }}/health
+    env:
+      TARGET_LAMBDA: ${{ inputs.lambda }}
+      API_STAGE: ${{ inputs.stage }}
+      API_BASE: https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ inputs.stage }}
+    steps:
+      - uses: actions/checkout@v4
+        if: ${{ inputs.stage == 'test' || inputs.stage == 'staging' }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: lambda-bootstrap
+          path: artifact
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Deploy the shared Lambda package and verify configuration
+        run: |
+          set -euo pipefail
+          ZIP='artifact/bootstrap.zip'
+          test -f "$ZIP"
+          EXPECTED_HASH=$(openssl dgst -sha256 -binary "$ZIP" | openssl base64 -A)
+          aws lambda update-function-code --function-name "$TARGET_LAMBDA" \
+            --zip-file "fileb://$ZIP" --query '{CodeSha256:CodeSha256,LastUpdateStatus:LastUpdateStatus}'
+          aws lambda wait function-updated --function-name "$TARGET_LAMBDA"
+          CONFIG=$(aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" \
+            --query '{hash:CodeSha256,status:LastUpdateStatus,stage:Environment.Variables.ENVIRONMENT,table:Environment.Variables.DYNAMODB_TABLE,bucket:Environment.Variables.S3_BUCKET}' \
+            --output json)
+          jq -e --arg hash "$EXPECTED_HASH" --arg stage "$API_STAGE" '
+            .hash == $hash and .status == "Successful" and .stage == $stage and
+            (.table | type == "string" and length > 0) and
+            (.bucket | type == "string" and length > 0)
+          ' <<< "$CONFIG" >/dev/null
+
+      - name: Wait for API health and verify environment identity
+        run: |
+          set -euo pipefail
+          BODY=$(mktemp)
+          for attempt in 1 2 3; do
+            STATUS=$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+              --output "$BODY" --write-out '%{http_code}' "$API_BASE/health" || true)
+            if [[ "$STATUS" == 200 ]] && \
+              jq -e --arg stage "$API_STAGE" '.status == "ok" and .env == $stage' "$BODY" >/dev/null; then
+              echo "Health passed for $API_STAGE"
+              exit 0
+            fi
+            echo "Attempt $attempt: HTTP $STATUS"
+            sleep 5
+          done
+          echo "Health failed for $API_STAGE" >&2
+          exit 1
+
+      - uses: actions/setup-node@v4
+        if: ${{ inputs.stage == 'test' || inputs.stage == 'staging' }}
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the frontend and install Chromium
+        if: ${{ inputs.stage == 'test' || inputs.stage == 'staging' }}
+        working-directory: web
+        env:
+          VITE_API_STAGE: ${{ inputs.stage }}
+        run: |
+          npm ci
+          npm run build
+          npx playwright install --with-deps chromium
+      - name: Test API, storage and browser acceptance
+        if: ${{ inputs.stage == 'test' || inputs.stage == 'staging' }}
+        working-directory: web
+        run: |
+          set -euo pipefail
+          WORK_DIR=$(mktemp -d)
+          API_BASE="https://6xz841x652.execute-api.us-east-1.amazonaws.com/$API_STAGE"
+          SOURCE='Contact pipeline-demo@example.com'
+          SESSION_ID=$(cat /proc/sys/kernel/random/uuid)
+          VALUES=$(jq -nc --arg sid "$SESSION_ID" '{":sid": {S: $sid}}')
+          CONFIG=$(aws lambda get-function-configuration \
+            --function-name "poco-pii-api-handler-$API_STAGE" \
+            --query 'Environment.Variables.{stage:ENVIRONMENT,table:DYNAMODB_TABLE,bucket:S3_BUCKET}' --output json)
+          jq -e --arg stage "$API_STAGE" '.stage == $stage and
+            (.table | type == "string" and length > 0) and
+            (.bucket | type == "string" and length > 0)' <<< "$CONFIG" >/dev/null
+          TABLE=$(jq -r .table <<< "$CONFIG")
+          BUCKET=$(jq -r .bucket <<< "$CONFIG")
+
+          request() {
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 60 "$@"
+          }
+          query_session() {
+            aws dynamodb query --table-name "$TABLE" --consistent-read \
+              --key-condition-expression 'sessionId = :sid' \
+              --expression-attribute-values "$VALUES" --output json
+          }
+          cleanup() {
+            result=$?
+            trap - EXIT
+            cleared=false
+            for attempt in 1 2 3; do
+              if request -X DELETE "$API_BASE/sessions/$SESSION_ID" --output /dev/null && \
+                query_session > "$WORK_DIR/cleanup.json" && \
+                jq -e '.Count == 0' "$WORK_DIR/cleanup.json" >/dev/null; then
+                cleared=true
+                break
+              fi
+              echo "Retrying synthetic-session cleanup (attempt $attempt)."
+              sleep 2
+            done
+            if [[ "$cleared" != true ]]; then
+              echo "ERROR: Could not clear synthetic session $SESSION_ID." >&2
+              result=1
+            fi
+            if ! aws s3api delete-object --bucket "$BUCKET" \
+              --key "documents/redacted/$SESSION_ID/encode.txt" >/dev/null; then
+              echo "ERROR: Could not remove the synthetic session's archive." >&2
+              result=1
+            fi
+            if [[ "$result" == 0 ]]; then
+              echo "- $API_STAGE: API/storage/browser acceptance and synthetic-data cleanup passed." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit "$result"
+          }
+          trap cleanup EXIT
+
+          echo "Checking $API_STAGE health before API integration tests."
+          request "$API_BASE/health" --output "$WORK_DIR/health.json"
+          jq -e --arg stage "$API_STAGE" '.status == "ok" and .env == $stage' \
+            "$WORK_DIR/health.json" >/dev/null
+          jq -nc --arg sid "$SESSION_ID" --arg text "$SOURCE" \
+            '{sessionId: $sid, text: $text}' > "$WORK_DIR/input.json"
+          echo 'Encoding synthetic text and checking the redacted output.'
+          request -H 'Content-Type: application/json' --data-binary "@$WORK_DIR/input.json" \
+            "$API_BASE/encode" --output "$WORK_DIR/encoded.json"
+          jq -e --arg sid "$SESSION_ID" '.sessionId == $sid and
+            .redactedText == "Contact [Email_1]" and
+            any(.mappings[]; .token == "Email_1" and .value == "pipeline-demo@example.com")' \
+            "$WORK_DIR/encoded.json" >/dev/null
+
+          echo 'Checking session mappings returned by the API.'
+          mappings_ok=false
+          for attempt in 1 2 3; do
+            request "$API_BASE/sessions/$SESSION_ID/mappings" --output "$WORK_DIR/mappings.json"
+            if jq -e --arg sid "$SESSION_ID" '.sessionId == $sid and
+              any(.mappings[]; .token == "Email_1" and .value == "pipeline-demo@example.com")' \
+              "$WORK_DIR/mappings.json" >/dev/null; then
+              mappings_ok=true
+              break
+            fi
+            echo "Waiting for mappings (attempt $attempt)."
+            sleep 2
+          done
+          [[ "$mappings_ok" == true ]]
+          echo 'Reading the synthetic session directly from DynamoDB.'
+          query_session > "$WORK_DIR/stored.json"
+          jq -e 'any(.Items[]; .token.S == "Email_1" and
+            .value.S == "pipeline-demo@example.com" and (.expiresAt.N | tonumber) > now)' \
+            "$WORK_DIR/stored.json" >/dev/null
+          echo 'Comparing the actual S3 archive with the redacted API output.'
+          jq -j .redactedText "$WORK_DIR/encoded.json" > "$WORK_DIR/expected.txt"
+          aws s3 cp "s3://$BUCKET/documents/redacted/$SESSION_ID/encode.txt" \
+            "$WORK_DIR/archive.txt" --only-show-errors
+          cmp "$WORK_DIR/expected.txt" "$WORK_DIR/archive.txt"
+
+          echo 'Decoding and checking the original synthetic text is restored.'
+          jq --arg sid "$SESSION_ID" '{sessionId: $sid, text: .redactedText}' \
+            "$WORK_DIR/encoded.json" > "$WORK_DIR/decode-input.json"
+          request -H 'Content-Type: application/json' --data-binary "@$WORK_DIR/decode-input.json" \
+            "$API_BASE/decode" --output "$WORK_DIR/decoded.json"
+          jq -e --arg sid "$SESSION_ID" --arg text "$SOURCE" \
+            '.sessionId == $sid and .restoredText == $text and .hallucinations == []' \
+            "$WORK_DIR/decoded.json" >/dev/null
+
+          export PIPELINE_TEST_SESSION="$SESSION_ID" PIPELINE_API_BASE="$API_BASE" PIPELINE_TEST_SOURCE="$SOURCE"
+          export ACCEPTANCE_EVIDENCE="$GITHUB_WORKSPACE/acceptance-evidence/$API_STAGE"
+          mkdir -p "$ACCEPTANCE_EVIDENCE"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { spawn } from 'node:child_process'
+          import { appendFileSync, writeFileSync } from 'node:fs'
+          import { join } from 'node:path'
+          import { setTimeout as delay } from 'node:timers/promises'
+          import { chromium } from 'playwright'
+
+          const api = process.env.PIPELINE_API_BASE
+          const session = process.env.PIPELINE_TEST_SESSION
+          const source = process.env.PIPELINE_TEST_SOURCE
+          const evidence = process.env.ACCEPTANCE_EVIDENCE
+          const preview = spawn('npm', ['run', 'preview', '--', '--host', '127.0.0.1', '--port', '4173', '--strictPort'], {
+            detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+          })
+          for (const stream of [preview.stdout, preview.stderr]) {
+            stream.on('data', data => appendFileSync(join(evidence, 'preview.log'), data))
+          }
+          let browser, context, page, tracing = false
+          try {
+            let ready = false
+            for (let attempt = 0; attempt < 30; attempt++) {
+              assert.equal(preview.exitCode, null, 'Preview server exited; inspect preview.log')
+              try { ready = (await fetch('http://127.0.0.1:4173')).ok } catch { /* server starting */ }
+              if (ready) break
+              await delay(500)
+            }
+            assert(ready, 'Preview server did not start')
+            browser = await chromium.launch()
+            context = await browser.newContext({ viewport: { width: 1366, height: 900 } })
+            await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
+            tracing = true
+            // Reuse only this job's fresh synthetic session so the shell trap cleans all test writes.
+            await context.addInitScript(id => localStorage.setItem('poco.sessionId', id), session)
+            page = await context.newPage()
+            page.setDefaultTimeout(20_000)
+            const errors = []
+            page.on('pageerror', error => errors.push(error.message))
+            page.on('response', response => {
+              if (response.url().startsWith(`${api}/`) && response.status() >= 400) {
+                errors.push(`API HTTP ${response.status()}: ${response.url()}`)
+              }
+            })
+            await page.goto('http://127.0.0.1:4173')
+            await page.waitForFunction(stage => document.querySelector('.demo-note')?.textContent.includes(`API ${stage} ·`), process.env.API_STAGE)
+            const input = page.getByLabel('Input', { exact: true })
+            // Use real pointer/keyboard input: fill() alone misses overlays blocking users.
+            await input.click()
+            await input.pressSequentially(source)
+            assert.equal(await input.inputValue(), source)
+            const [encoded] = await Promise.all([
+              page.waitForResponse(response => response.url() === `${api}/encode` && response.request().method() === 'POST'),
+              page.getByRole('button', { name: 'Encode', exact: true }).click(),
+            ])
+            assert.equal(encoded.status(), 200)
+            const result = await encoded.json()
+            assert.equal(result.sessionId, session)
+            assert.equal(result.redactedText, 'Contact [Email_1]')
+            await page.waitForFunction(text => document.querySelector('pre.output')?.textContent === text, result.redactedText)
+            await page.screenshot({ path: join(evidence, 'encode.png'), fullPage: true })
+            await page.getByRole('navigation').getByRole('button', { name: /^Vault/ }).click()
+            await page.getByRole('heading', { name: 'Vault', exact: true }).waitFor()
+            await page.getByRole('cell', { name: 'pipeline-demo@example.com', exact: true }).waitFor()
+            await page.screenshot({ path: join(evidence, 'vault.png'), fullPage: true })
+            await page.reload()
+            assert.equal(await page.evaluate(() => localStorage.getItem('poco.sessionId')), session)
+            await page.getByRole('navigation').getByRole('button', { name: /^Decode/ }).click()
+            await page.getByLabel('Input', { exact: true }).fill(result.redactedText)
+            await page.getByRole('button', { name: 'Decode', exact: true }).click()
+            await page.waitForFunction(text => document.querySelector('pre.output')?.textContent === text, source)
+            await page.screenshot({ path: join(evidence, 'decode.png'), fullPage: true })
+            await page.getByLabel('Input', { exact: true }).fill(`${result.redactedText} [Person_99]`)
+            await page.getByRole('button', { name: 'Decode', exact: true }).click()
+            await page.waitForFunction(text => document.querySelector('pre.output')?.textContent === text, `${source} [Person_99]`)
+            await page.getByRole('alert').filter({ hasText: '[Person_99]' }).waitFor()
+            await page.screenshot({ path: join(evidence, 'unknown-token.png'), fullPage: true })
+            assert.deepEqual(errors, [], 'Browser or API errors occurred')
+            assert.equal(preview.exitCode, null, 'Preview server exited during acceptance')
+            console.log('Browser acceptance passed: Encode, Vault, refresh, Decode and unknown-token warning.')
+          } catch (error) {
+            writeFileSync(join(evidence, 'failure.txt'), String(error.stack || error))
+            if (page) await page.screenshot({ path: join(evidence, 'failure.png'), fullPage: true }).catch(() => {})
+            throw error
+          } finally {
+            try {
+              if (tracing) await context.tracing.stop({ path: join(evidence, 'trace.zip') })
+            } finally {
+              if (browser) await browser.close()
+              if (preview.pid) { try { process.kill(-preview.pid, 'SIGTERM') } catch { /* already stopped */ } }
+            }
+          }
+          NODE
+      - name: Save browser acceptance evidence
+        if: ${{ !cancelled() && (inputs.stage == 'test' || inputs.stage == 'staging') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-acceptance-${{ inputs.stage }}
+          path: acceptance-evidence/${{ inputs.stage }}/
+          retention-days: 7

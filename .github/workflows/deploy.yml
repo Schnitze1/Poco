@@ -2,130 +2,342 @@ name: Deploy
 
 on:
   push:
-    branches:
-      - develop
-      - 'test/**'
-      - 'release/**'
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# One shared chain owns all four environments. Never interrupt an active release.
+concurrency:
+  group: poco-delivery
+  cancel-in-progress: false
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: pii-tool
+  source:
+    name: Source branch
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: pii-tool
-      - name: Run tests
-        run: cargo test --workspace -- --test-threads=1
-
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Determine environment
-        id: env
+      - name: Require the main trunk
         run: |
-          REF="${{ github.ref }}"
-          if [[ "$REF" == "refs/heads/develop" ]]; then
-            echo "name=dev" >> $GITHUB_OUTPUT
-            echo "lambda=poco-pii-api-handler-dev" >> $GITHUB_OUTPUT
-          elif [[ "$REF" == refs/heads/test/* ]]; then
-            echo "name=test" >> $GITHUB_OUTPUT
-            echo "lambda=poco-pii-api-handler-test" >> $GITHUB_OUTPUT
-          elif [[ "$REF" == refs/heads/release/* ]]; then
-            echo "name=staging" >> $GITHUB_OUTPUT
-            echo "lambda=poco-pii-api-handler-staging" >> $GITHUB_OUTPUT
-          else
-            echo "Unknown branch: $REF"
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo 'Run delivery from main.' >&2
             exit 1
           fi
+
+  checks:
+    name: CI
+    needs: source
+    uses: ./.github/workflows/ci.yml
+    with:
+      api-stage: prod
+      upload-pages-artifact: true
+
+  preflight:
+    name: AWS readiness
+    needs: checks
+    uses: ./.github/workflows/test-aws.yml
+    secrets: inherit
+
+  package:
+    name: Build Lambda
+    needs: [checks, preflight]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Build Lambda in Amazon Linux 2023 container (glibc 2.34)
         run: |
           set -euo pipefail
-          # Drop any stale artifacts (rust-cache / prior steps).
-          find pii-tool/target -name 'bootstrap.zip' -type f -delete 2>/dev/null || true
-          find pii-tool/target -name 'bootstrap' -type f -delete 2>/dev/null || true
-          docker run --rm \
+          docker run --rm -i \
             -v "$PWD":/work \
             -w /work/pii-tool \
             amazonlinux:2023 \
-            bash /work/pii-tool/crates/lambda/build_lambda.sh
+            bash -s <<'BUILD'
+          set -euo pipefail
+          dnf install -y gcc gcc-c++ make zip unzip openssl-devel git cmake pkgconf perl ca-certificates findutils tar patchelf file
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          source "$HOME/.cargo/env"
+
+          cc -c crates/lambda/glibc_compat.c -o /tmp/glibc_compat.o
+          RUSTFLAGS='-C link-arg=/tmp/glibc_compat.o' cargo build --locked --release -p poco-lambda
+
+          PACKAGE_OUT=target/lambda/poco-lambda
+          rm -rf "$PACKAGE_OUT"
+          mkdir -p "$PACKAGE_OUT"
+          cp target/release/poco-lambda "$PACKAGE_OUT/bootstrap"
+          chmod +x "$PACKAGE_OUT/bootstrap"
+          for symbol in __isoc23_strtoll __isoc23_strtol __isoc23_strtoull __isoc23_strtoul; do
+            patchelf --clear-symbol-version "$symbol" "$PACKAGE_OUT/bootstrap" || true
+          done
+          file "$PACKAGE_OUT/bootstrap"
+          ldd "$PACKAGE_OUT/bootstrap" || true
+          (cd "$PACKAGE_OUT" && zip -q bootstrap.zip bootstrap)
+          unzip -l "$PACKAGE_OUT/bootstrap.zip"
+          test -f "$PACKAGE_OUT/bootstrap.zip"
+          BUILD
 
       - name: Verify artifact
         run: |
           set -euo pipefail
           ZIP="pii-tool/target/lambda/poco-lambda/bootstrap.zip"
-          echo "ZIP=$ZIP"
           ls -la "$ZIP"
           unzip -l "$ZIP"
-          TMP=$(mktemp -d)
-          unzip -q -o "$ZIP" -d "$TMP"
-          echo "=== binary in zip ==="
-          file "$TMP/bootstrap"
-          if objdump -T "$TMP/bootstrap" | grep -q GLIBC_2.38; then
-            echo "ERROR: zip binary still requires GLIBC_2.38"
-            objdump -T "$TMP/bootstrap" | grep GLIBC_2.38
+          PACKAGE_DIR=$(mktemp -d)
+          unzip -q -o "$ZIP" -d "$PACKAGE_DIR"
+          test -x "$PACKAGE_DIR/bootstrap"
+          file "$PACKAGE_DIR/bootstrap"
+          objdump -T "$PACKAGE_DIR/bootstrap" > "$PACKAGE_DIR/symbols.txt"
+          if grep -q GLIBC_2.38 "$PACKAGE_DIR/symbols.txt"; then
+            echo "ERROR: zip binary requires GLIBC_2.38"
             exit 1
           fi
           echo "OK: no GLIBC_2.38 requirement"
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Upload verified Lambda package
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-bootstrap
+          path: pii-tool/target/lambda/poco-lambda/bootstrap.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  development:
+    name: Development
+    needs: package
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      stage: dev
+      environment: dev
+      lambda: poco-pii-api-handler-dev
+    secrets: inherit
+
+  testing:
+    name: Testing
+    needs: development
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      stage: test
+      environment: testing
+      lambda: poco-pii-api-handler-test
+    secrets: inherit
+
+  staging:
+    name: Staging
+    needs: testing
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      stage: staging
+      environment: staging
+      lambda: poco-pii-api-handler-staging
+    secrets: inherit
+
+  production:
+    name: Production
+    needs: staging
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      stage: prod
+      environment: production
+      lambda: poco-pii-api-handler
+    secrets: inherit
+
+  monitoring:
+    name: Production monitoring
+    needs: production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    concurrency:
+      group: poco-production-monitoring
+      cancel-in-progress: false
+    env:
+      TARGET_LAMBDA: poco-pii-api-handler
+      # AWS x86-64 extension 1.0.776.0, pinned for us-east-1.
+      # https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-extension-versionsx86-64.html
+      INSIGHTS_LAYER: arn:aws:lambda:us-east-1:580247275435:layer:LambdaInsightsExtension:66
+      EVIDENCE_DIR: ${{ github.workspace }}/production-monitoring-evidence
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
-
-      - name: Deploy to Lambda
+      - name: Enable Lambda Insights and verify production health
         run: |
           set -euo pipefail
-          echo "=== caller identity ==="
-          aws sts get-caller-identity || true
-          ZIP="pii-tool/target/lambda/poco-lambda/bootstrap.zip"
-          echo "ZIP=$ZIP"
-          if [ ! -f "$ZIP" ]; then
-            echo "ERROR: bootstrap.zip not found at $ZIP"
-            find pii-tool/target -type f | head -50
-            exit 1
+          WORK_DIR=$(mktemp -d)
+          mkdir -p "$EVIDENCE_DIR"
+          URL='https://6xz841x652.execute-api.us-east-1.amazonaws.com/prod/health'
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$URL" \
+            > "$WORK_DIR/health.json"
+          jq -e '.status == "ok" and .env == "prod"' "$WORK_DIR/health.json" >/dev/null
+          aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" \
+            --query '{revision:RevisionId,hash:CodeSha256,layers:Layers[].Arn,runtime:Runtime,arch:Architectures}' \
+            --output json > "$WORK_DIR/original.json"
+          jq -e '.runtime == "provided.al2023" and .arch == ["x86_64"]' "$WORK_DIR/original.json" >/dev/null
+          jq --arg name "$TARGET_LAMBDA" --arg layer "$INSIGHTS_LAYER" '{
+            FunctionName: $name, RevisionId: .revision,
+            Layers: ((.layers // [] | map(select(contains(":layer:LambdaInsightsExtension:") | not))) + [$layer])
+          }' "$WORK_DIR/original.json" > "$WORK_DIR/update.json"
+          jq -e '.Layers | length <= 5' "$WORK_DIR/update.json" >/dev/null
+          UPDATED=false
+          APPLIED_REVISION=''
+          restore_on_failure() {
+            result=$?
+            trap - EXIT
+            if [[ "$result" != 0 && "$UPDATED" == true ]]; then
+              echo 'Monitoring health validation failed; restoring the previous layer configuration.' >&2
+              jq --arg name "$TARGET_LAMBDA" --arg revision "$APPLIED_REVISION" \
+                '{FunctionName: $name, RevisionId: $revision, Layers: (.layers // [])}' \
+                "$WORK_DIR/original.json" > "$WORK_DIR/restore.json"
+              if ! aws lambda update-function-configuration --cli-input-json "file://$WORK_DIR/restore.json" \
+                --query LastUpdateStatus --output text; then
+                echo 'ERROR: Layer restoration failed; inspect the production Lambda configuration.' >&2
+              else
+                aws lambda wait function-updated --function-name "$TARGET_LAMBDA"
+              fi
+            fi
+            exit "$result"
+          }
+          trap restore_on_failure EXIT
+          if ! jq -e --arg layer "$INSIGHTS_LAYER" '(.layers // []) | index($layer) != null' \
+            "$WORK_DIR/original.json" >/dev/null; then
+            APPLIED_REVISION=$(aws lambda update-function-configuration \
+              --cli-input-json "file://$WORK_DIR/update.json" --query RevisionId --output text)
+            UPDATED=true
+            aws lambda wait function-updated --function-name "$TARGET_LAMBDA"
           fi
-          ls -la "$ZIP"
-          aws lambda update-function-code \
-            --function-name ${{ steps.env.outputs.lambda }} \
-            --zip-file fileb://$ZIP \
-            --region us-east-1
-          aws lambda wait function-updated \
-            --function-name ${{ steps.env.outputs.lambda }} \
-            --region us-east-1
-          aws lambda get-function-configuration \
-            --function-name ${{ steps.env.outputs.lambda }} \
-            --region us-east-1 \
-            --query '{Runtime:Runtime,Handler:Handler,Arch:Architectures,LastUpdateStatus:LastUpdateStatus}' \
-            --output json
+          # Health requests also generate fresh monitoring samples without creating sessions.
+          for attempt in 1 2 3 4 5 6; do
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$URL" \
+              > "$WORK_DIR/health.json"
+            jq -e '.status == "ok" and .env == "prod"' "$WORK_DIR/health.json" >/dev/null
+            echo "Production health request $attempt passed."
+            sleep 1
+          done
+          AFTER_HASH=$(aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" \
+            --query CodeSha256 --output text)
+          [[ "$AFTER_HASH" == "$(jq -r .hash "$WORK_DIR/original.json")" ]]
+          echo 'Production Insights layer and health validated; application code hash preserved.' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Smoke test
+      - name: Wait for CPU, memory, disk and network metrics
         run: |
-          URL="https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ steps.env.outputs.name }}/health"
-          for i in 1 2 3; do
-            STATUS=$(curl -s -o /tmp/health_body -w "%{http_code}" "$URL" || true)
-            echo "Attempt $i: HTTP $STATUS"
-            echo "body: $(cat /tmp/health_body 2>/dev/null || true)"
-            if [ "$STATUS" = "200" ]; then
-              echo "✓ Smoke test passed"
+          set -euo pipefail
+          START_TIME=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          API_NAME=$(aws apigateway get-rest-api --rest-api-id 6xz841x652 --query name --output text)
+          # Quiet functions may buffer Insights data for up to 20 minutes.
+          # Continue health traffic so active sandboxes can flush samples.
+          # https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Lambda-Insights-Troubleshooting.html
+          for attempt in {1..80}; do
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+              'https://6xz841x652.execute-api.us-east-1.amazonaws.com/prod/health' \
+              | jq -e '.status == "ok" and .env == "prod"' >/dev/null
+            END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            for metric in cpu_total_time memory_utilization tmp_used rx_bytes tx_bytes; do
+              aws cloudwatch get-metric-statistics --namespace LambdaInsights --metric-name "$metric" \
+                --dimensions "Name=function_name,Value=$TARGET_LAMBDA" \
+                --start-time "$START_TIME" --end-time "$END_TIME" --period 60 --statistics Maximum \
+                --output json > "$EVIDENCE_DIR/$metric.json"
+            done
+            aws cloudwatch get-metric-statistics --namespace AWS/ApiGateway --metric-name Latency \
+              --dimensions "Name=ApiName,Value=$API_NAME" Name=Stage,Value=prod \
+              --start-time "$START_TIME" --end-time "$END_TIME" --period 60 --statistics Average \
+              --output json > "$EVIDENCE_DIR/http-latency.json"
+            if jq -s -e 'all(.Datapoints | length > 0)' "$EVIDENCE_DIR"/*.json >/dev/null; then
+              echo 'Production CPU, memory, temporary-disk, network and HTTP latency samples verified.' >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            sleep 5
+            echo "Waiting for Lambda Insights ingestion (attempt $attempt)."
+            sleep 10
           done
-          echo "✗ Smoke test failed"
+          for metric in cpu_total_time memory_utilization tmp_used rx_bytes tx_bytes http-latency; do
+            echo "$metric samples: $(jq '.Datapoints | length' "$EVIDENCE_DIR/$metric.json")"
+          done
+          echo 'ERROR: Monitoring metrics are missing after the ingestion window. Verify LabRole can write /aws/lambda-insights logs; this workflow does not change IAM.' >&2
+          exit 1
+
+      - name: Create the production dashboard
+        run: |
+          set -euo pipefail
+          export MONITOR_API_NAME
+          MONITOR_API_NAME=$(aws apigateway get-rest-api --rest-api-id 6xz841x652 --query name --output text)
+          python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          function = os.environ['TARGET_LAMBDA']
+          api = os.environ['MONITOR_API_NAME']
+          widgets = []
+          def widget(title, metrics, stat='Average'):
+              index = len(widgets)
+              widgets.append({'type': 'metric', 'x': (index % 2) * 12, 'y': (index // 2) * 6,
+                  'width': 12, 'height': 6, 'properties': {'title': title, 'region': 'us-east-1',
+                  'period': 60, 'stat': stat, 'metrics': metrics}})
+          def runtime(metric, **options):
+              return ['AWS/Lambda', metric, 'FunctionName', function, options]
+          def insights(metric, **options):
+              return ['LambdaInsights', metric, 'function_name', function, options]
+          def gateway(metric, **options):
+              return ['AWS/ApiGateway', metric, 'ApiName', api, 'Stage', 'prod', options]
+          widget('Lambda requests, errors and throttles', [runtime(m) for m in ['Invocations', 'Errors', 'Throttles']], 'Sum')
+          widget('Lambda execution duration (ms)', [runtime('Duration'), runtime('Duration', stat='p95', label='p95')])
+          widget('CPU time per minute (ms)', [insights('cpu_total_time')], 'Sum')
+          widget('Memory usage (MB left, percent right)', [insights('used_memory_max'), insights('memory_utilization', yAxis='right')], 'Maximum')
+          widget('Temporary disk used (bytes)', [insights('tmp_used')], 'Maximum')
+          widget('Network received / sent (bytes per minute)', [insights('rx_bytes'), insights('tx_bytes')], 'Sum')
+          widget('Production HTTP latency (ms)', [gateway('Latency'), gateway('Latency', stat='p95', label='p95')])
+          widget('Production HTTP 4xx / 5xx responses', [gateway('4XXError'), gateway('5XXError')], 'Sum')
+          Path(os.environ['EVIDENCE_DIR'], 'dashboard.json').write_text(json.dumps({'widgets': widgets}))
+          PY
+          aws cloudwatch put-dashboard --dashboard-name Poco-Production \
+            --dashboard-body "file://$EVIDENCE_DIR/dashboard.json" --output json > "$EVIDENCE_DIR/dashboard-result.json"
+          jq -e '(.DashboardValidationMessages // []) | length == 0' "$EVIDENCE_DIR/dashboard-result.json" >/dev/null
+          echo '[Open Poco-Production dashboard](https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards:name=Poco-Production)' >> "$GITHUB_STEP_SUMMARY"
+      - name: Save monitoring evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-monitoring-evidence
+          path: production-monitoring-evidence/
+          retention-days: 7
+
+  publish-web:
+    name: Publish and verify website
+    needs: monitoring
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Verify published website and commit metadata
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SITE_URL"
+          BODY=$(mktemp)
+          for attempt in {1..12}; do
+            STATUS=$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+              --header 'Cache-Control: no-cache' --output "$BODY" --write-out '%{http_code}' \
+              "${SITE_URL%/}/deployment.json?commit=$EXPECTED_COMMIT" || true)
+            if [[ "$STATUS" == 200 ]] && \
+              jq -e --arg commit "$EXPECTED_COMMIT" '.commit == $commit and .stage == "prod"' "$BODY" >/dev/null; then
+              curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+                --output /dev/null "$SITE_URL"
+              echo 'Published website is reachable and release metadata matches.'
+              exit 0
+            fi
+            echo "Attempt $attempt: waiting for published release metadata (HTTP $STATUS)"
+            sleep 10
+          done
+          echo 'Published website verification failed.' >&2
           exit 1

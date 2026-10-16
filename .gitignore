@@ -11,6 +11,17 @@ target/
 
 # Demo/scratch outputs (not source)
 pii-tool/output/
+/demo-evidence/
+
+# Node
+**/node_modules/
+**/dist/
+**/coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
