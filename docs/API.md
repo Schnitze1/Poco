@@ -181,7 +181,9 @@ Empty session → `"mappings": []`.
 
 ---
 
-## `PUT /api/v1/sessions/{sessionId}/mappings`
+## `POST /api/v1/sessions/{sessionId}/mappings`
+
+Create or update a mapping. Browser clients use `POST`, which the existing API Gateway preflight permits. The handler retains `PUT` as an alias for clients whose gateway configuration supports it.
 
 Insert or replace one mapping (Vault edit / add token).
 
@@ -253,7 +255,7 @@ Non-2xx responses:
 API Gateway must allow:
 
 * `Origin`: your CloudFront/site origin (and `http://localhost:*` for dev)
-* `Methods`: `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`
+* `Methods`: `GET`, `POST`, `DELETE`, `OPTIONS` for the browser client. The Lambda handler also accepts `PUT` for mapping upserts where the gateway preflight permits it.
 * `Headers`: `Content-Type`
 * `Access-Control-Allow-Origin` echoed as appropriate (lab: `*` is acceptable if cookies are unused)
 
