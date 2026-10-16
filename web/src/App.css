@@ -171,3 +171,8 @@ td input { width: 100%; }
  .quiet { min-height: 34px; }
  .row-actions { gap: 8px; }
 }
+
+/* Output words are selectable controls; the input remains a normal textarea. */
+.word-redact { display: inline; border: 0; padding: 0; margin: 0; background: transparent; color: inherit; font: inherit; border-radius: 3px; text-align: inherit; }
+.word-redact:hover:not(:disabled) { background: var(--hover); text-decoration: underline; }
+.word-redact:disabled { opacity: 1; }

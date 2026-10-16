@@ -122,7 +122,7 @@ Encode creates a **new vault per request** and writes mappings under a session I
 ## Known limitations
 
 - Bare person names (no title/cue) are unreliable; review the redacted output before use.
-- Manual Vault editing/redaction has a reported issue. The acceptance suite covers reading mappings, not adding or editing them.
+- Browser acceptance covers reading mappings and the core encode/decode flow; manual Vault mutations and uploads are outside the automated browser suite.
 - PDF extract: CJK glyphs may be lost; line order may not match the logical document  
 - Scanned/image-only PDFs are out of scope (`NoTextLayer`)  
 - Card expiry/CVV and product codes/versions are intentionally not redacted  

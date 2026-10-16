@@ -17,6 +17,7 @@ import { loadWorkspace, saveWorkspace, loadSession, saveSession } from './persis
 import type { DocTab } from './types'
 import { DocumentTabs } from './components/DocumentTabs'
 import { Vault } from './components/Vault'
+import { nextManualToken, updateRedactedOutput } from './manualRedaction'
 import './App.css'
 
 type Page = 'Encode' | 'Decode' | 'Vault'
@@ -31,6 +32,7 @@ type Document = {
   unknown: string[]
   mappings: Mapping[]
   nextIdx: Record<string, number>
+  manualMappings?: Mapping[]
 }
 
 function newDocument(id: number, name?: string): Document {
@@ -73,16 +75,19 @@ function NavIcon({ page }: { page: Page }) {
   )
 }
 
-function TokenText({ text, mappings }: { text: string; mappings: Mapping[] }) {
+function TokenText({ text, mappings, onPick, busy }: {
+  text: string; mappings: Mapping[]; onPick: (word: string) => void; busy: boolean
+}) {
   return text.split(/(\[[A-Za-z][A-Za-z0-9_:]*_\d+\])/g).map((part, index) => {
     const mapping = mappings.find((m) => `[${m.token}]` === part)
-    return mapping ? (
-      <mark key={index} className={`token-${mapping.category.toLowerCase()}`}>
-        {part}
-      </mark>
-    ) : (
-      part
-    )
+    if (mapping) return <mark key={index} className={`token-${mapping.category.toLowerCase()}`}>{part}</mark>
+    if (index % 2) return part
+    return <span key={index}>{part.split(/([\p{L}\p{N}][\p{L}\p{N}'’@_+-]*(?:\.[\p{L}\p{N}'’@_+-]+)*)/gu).map((word, i) => (
+      i % 2 && word.length >= 2
+        ? <button key={i} type="button" className="word-redact" disabled={busy}
+            aria-label={`Redact ${word}`} title="Create a token for this text" onClick={() => onPick(word)}>{word}</button>
+        : word
+    ))}</span>
   })
 }
 
@@ -120,7 +125,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [apiStatus, setApiStatus] = useState<string>('checking…')
   const [sessionId, setSessionId] = useState<string | null>(loadSessionId)
-  const [draftToken, setDraftToken] = useState<{ value: string; cls: string } | null>(null)
+  const [draftToken, setDraftToken] = useState<{ value: string; cls: string; returnToEncode?: boolean } | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   /** 3. Naming counter only — never used as an id. */
@@ -210,7 +215,7 @@ function App() {
     setNotice('')
     const documentId = active.id
     try {
-      const result = await encodeText(sessionId, active.input)
+      const result = await encodeText(sessionId, active.input, undefined, active.manualMappings ?? [])
       saveSessionId(result.sessionId)
       setSessionId(result.sessionId)
       const nextIdx: Record<string, number> = {}
@@ -259,57 +264,98 @@ function App() {
     }
   }
 
-  async function changeMappings(mappings: Mapping[]) {
-    const previous = active.mappings
-    const documentId = active.id
-    if (sessionId) {
-      try {
-        for (const old of previous) {
-          if (!mappings.some((m) => m.token === old.token)) {
-            await deleteMapping(sessionId, old.token)
-          }
-        }
-        for (const next of mappings) {
-          const before = previous.find((p) => p.token === next.token)
-          if (!before || before.value !== next.value || before.category !== next.category) {
-            await upsertMapping(sessionId, {
-              token: next.token,
-              value: next.value,
-              category: next.category,
-            })
-          }
-        }
-      } catch (e) {
-        setNotice(`Vault sync failed: ${e instanceof Error ? e.message : String(e)}`)
-        return
+  async function changeMappings(mappings: Mapping[]): Promise<boolean> {
+    if (busy) return false
+    const document = active
+    const sid = sessionId ?? crypto.randomUUID()
+    setBusy(true)
+    setNotice('')
+    try {
+      for (const old of document.mappings) {
+        if (!mappings.some((m) => m.token === old.token)) await deleteMapping(sid, old.token)
       }
+      for (const next of mappings) {
+        const before = document.mappings.find((p) => p.token === next.token)
+        if (!before || before.value !== next.value || before.category !== next.category) {
+          await upsertMapping(sid, { token: next.token, value: next.value, category: next.category })
+        }
+      }
+      const manualMappings = mappings.flatMap(mapping => {
+        const rule = document.manualMappings?.find(entry => entry.token === mapping.token)
+        const before = document.mappings.find(entry => entry.token === mapping.token)
+        if (!rule && before?.value === mapping.value) return []
+        return [{ ...mapping, sourceValue: rule?.sourceValue ?? rule?.value ?? before?.value ?? mapping.value }]
+      })
+      updateDocument(document.id, {
+        mappings, manualMappings,
+        output: updateRedactedOutput(document.output, document.mappings, mappings),
+        restored: '', unknown: [],
+      })
+      saveSessionId(sid)
+      setSessionId(sid)
+      setNotice('Vault updated on the server.')
+      return true
+    } catch (e) {
+      setNotice(`Vault sync failed: ${e instanceof Error ? e.message : String(e)}`)
+      return false
+    } finally {
+      setBusy(false)
     }
-    updateDocument(documentId, { mappings, restored: '', unknown: [] })
-    setNotice(sessionId ? 'Vault updated on the server.' : 'Local vault updated. Encode first to persist.')
   }
 
   function addTokenFromWord(word: string) {
-    const cls = guessClass(word)
-    setDraftToken({ value: word, cls })
+    setDraftToken({ value: word, cls: guessClass(word), returnToEncode: true })
     setActiveVault(active.id)
     setPage('Vault')
-    setNotice(`New token drafted from “${word}”. Choose a class and save.`)
+    setNotice('Choose a class and save to redact this text.')
   }
 
-  function commitDraftToken() {
-    if (!draftToken) return
-    const cls = draftToken.cls
-    const n = active.nextIdx[cls] ?? 1
-    const token = `${cls}_${n}`
-    const mapping: Mapping = {
-      token,
-      value: draftToken.value,
-      category: cls,
-      firstOffset: active.input.indexOf(draftToken.value),
+  async function commitDraftToken() {
+    if (!draftToken || busy || !draftToken.value.trim()) return
+    const draft = draftToken
+    const document = active
+    const value = draft.value.trim()
+    if (document.mappings.some(mapping => mapping.value === value)) {
+      setNotice('This value already has a token. Edit its existing mapping instead.')
+      return
     }
-    updateDocument(active.id, { nextIdx: { ...active.nextIdx, [cls]: n + 1 } })
-    void changeMappings([...active.mappings, mapping])
-    setDraftToken(null)
+    const token = nextManualToken(draft.cls, documents.flatMap(doc => doc.mappings), document.nextIdx)
+    const mapping: Mapping = { token, value, category: draft.cls, firstOffset: Math.max(0, document.input.indexOf(value)) }
+    const manualMappings = [...(document.manualMappings ?? []), mapping]
+    const sid = sessionId ?? crypto.randomUUID()
+    setBusy(true)
+    setNotice('')
+    try {
+      let mappings = [...document.mappings, mapping]
+      let output = document.output
+      if (document.input.trim()) {
+        // Apply manual rules on the server so the redacted output, mappings and S3 archive agree.
+        const result = await encodeText(sid, document.input, undefined, manualMappings)
+        mappings = result.mappings
+        output = result.redactedText
+      } else {
+        await upsertMapping(sid, { token, value, category: draft.cls })
+      }
+      const nextIdx = { ...document.nextIdx }
+      for (const entry of mappings) {
+        const index = Number(entry.token.match(/_(\d+)$/)?.[1] ?? 0)
+        nextIdx[entry.category] = Math.max(nextIdx[entry.category] ?? 1, index + 1)
+      }
+      updateDocument(document.id, { mappings, output, manualMappings, nextIdx, restored: '', unknown: [] })
+      saveSessionId(sid)
+      setSessionId(sid)
+      setDraftToken(current => current === draft ? null : current)
+      if (draft.returnToEncode) {
+        setActiveEncode(document.id)
+        setPage('Encode')
+      }
+      setNotice(document.input.trim() ? 'Token saved and redacted output updated.' : 'Token saved to the server vault.')
+    } catch (e) {
+      // Keep the form and its value available for correction/retry.
+      setNotice(`Vault sync failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
   }
 
   /**
@@ -364,7 +410,7 @@ function App() {
   }
 
   const descriptions = {
-    Encode: 'Replace sensitive information with tokens. Select text and choose Inspect PII to draft a token.',
+    Encode: 'Replace sensitive information with tokens. Click missed text in the output to add a token.',
     Decode: 'Restore tokens using the server session vault.',
     Vault: 'Inspect and edit mappings for the active document.',
   }
@@ -425,7 +471,7 @@ function App() {
               {page === 'Vault' && (
                 <button
                   className="danger"
-                  disabled={!active.mappings.length}
+                  disabled={busy || !active.mappings.length}
                   onClick={() => {
                     void changeMappings([])
                   }}
@@ -502,6 +548,7 @@ function App() {
                     <textarea
                       id="source-input"
                       ref={inputRef}
+                      disabled={busy}
                       value={input}
                       onChange={(e) => {
                         updateDocument(
@@ -529,7 +576,7 @@ function App() {
                   <pre className="output" tabIndex={0} aria-labelledby="output-label">
                     {output ? (
                       encoding ? (
-                        <TokenText text={output} mappings={active.mappings} />
+                        <TokenText text={output} mappings={active.mappings} onPick={addTokenFromWord} busy={busy} />
                       ) : (
                         output
                       )
@@ -551,6 +598,7 @@ function App() {
                 </button>
                 <button
                   className="secondary"
+                  disabled={busy}
                   onClick={() => {
                     const el = inputRef.current
                     const word = el ? wordAtSelection(el) : ''
@@ -575,15 +623,18 @@ function App() {
           {page === 'Vault' && (
             <>
               {draftToken && (
-                <div className="draft-token" role="region" aria-label="New token">
+                <form className="draft-token" aria-label="New token" onSubmit={(event) => { event.preventDefault(); void commitDraftToken() }}>
                   <strong>New token</strong>
                   <input
                     aria-label="Token value"
+                    autoFocus
+                    disabled={busy}
                     value={draftToken.value}
                     onChange={(e) => setDraftToken({ ...draftToken, value: e.target.value })}
                   />
                   <select
                     aria-label="Token class"
+                    disabled={busy}
                     value={draftToken.cls}
                     onChange={(e) => setDraftToken({ ...draftToken, cls: e.target.value })}
                   >
@@ -591,31 +642,22 @@ function App() {
                       <option key={c}>{c}</option>
                     ))}
                   </select>
-                  <button className="primary" onClick={commitDraftToken}>
-                    Save
+                  <button type="submit" className="primary" disabled={busy || !draftToken.value.trim()}>
+                    {busy ? 'Saving…' : 'Save'}
                   </button>
-                  <button className="quiet" onClick={() => setDraftToken(null)}>
+                  <button type="button" className="quiet" disabled={busy} onClick={() => setDraftToken(null)}>
                     Cancel
                   </button>
-                </div>
+                </form>
               )}
               <Vault
                 key={active.id}
                 mappings={active.mappings}
-                onChange={(next) => {
-                  void changeMappings(next)
-                }}
+                busy={busy}
+                onChange={changeMappings}
                 onAdd={() => {
-                  const cls = 'Custom'
-                  const n = active.nextIdx[cls] ?? 1
-                  const mapping: Mapping = {
-                    token: `${cls}_${n}`,
-                    value: 'new value',
-                    category: cls,
-                    firstOffset: 0,
-                  }
-                  updateDocument(active.id, { nextIdx: { ...active.nextIdx, [cls]: n + 1 } })
-                  void changeMappings([...active.mappings, mapping])
+                  setDraftToken({ value: '', cls: 'Custom' })
+                  setNotice('Enter the value and choose a class, then save.')
                 }}
               />
             </>

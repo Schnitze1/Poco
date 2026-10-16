@@ -1,6 +1,7 @@
 //! AWS Lambda HTTP handler for pii-core (local code only — deploy is CI's job).
 mod session;
 mod storage;
+mod manual;
 
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
 use serde::Serialize;
@@ -31,7 +32,7 @@ fn cors() -> [(&'static str, &'static str); 3] {
     [
         ("Access-Control-Allow-Origin", "*"),
         ("Access-Control-Allow-Headers", "Content-Type,Authorization"),
-        ("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS"),
+        ("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS"),
     ]
 }
 
@@ -358,7 +359,7 @@ pub async fn route(method: &str, path: &str, body: &str) -> Response<String> {
                 return json_response(500, b);
             }
         };
-        let encoded = match vault.encode(&text) {
+        let mut encoded = match vault.encode(&text) {
             Ok(e) => e,
             Err(e) => {
                 let msg = format!("{e:?}");
@@ -366,6 +367,20 @@ pub async fn route(method: &str, path: &str, body: &str) -> Response<String> {
                 return json_response(500, b);
             }
         };
+        if let Some(raw) = parsed.get("manualMappings") {
+            let raw = raw.clone();
+            let rules: Vec<manual::ManualMapping> = match serde_json::from_value(raw) {
+                Ok(rules) => rules,
+                Err(_) => {
+                    let b = err_body("invalid manualMappings");
+                    return json_response(400, b);
+                }
+            };
+            if let Err(e) = manual::apply(&mut encoded, &text, &rules) {
+                let b = err_body(&e);
+                return json_response(400, b);
+            }
+        }
         if let Err(e) = store_mappings(&session_id, &encoded.mappings).await {
             let b = err_body(&e);
             return json_response(500, b);

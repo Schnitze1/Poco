@@ -46,12 +46,12 @@ The API must allow the frontend origin and its request methods through CORS. Run
 ## Try the demo
 
 1. In **Encode**, choose **Use example**, then **Encode**. Tokens are highlighted in the output.
-2. Choose **Inspect PII** or **Vault** to filter, edit, add, or delete mappings. **Reset vault** clears the selected document's mappings.
+2. Click missed text in the encoded output, or select a phrase in the input and choose **Inspect PII**. Choose a class and save to update the redaction. In **Vault**, **Add token** opens the same form; edits/deletions are saved to the server, and failed saves keep the form available for retry. **Reset vault** clears the selected document's mappings.
 3. In **Decode**, choose **Use example**, then **Decode**. Known tokens restore from the selected document's vault; `[Person_99]` intentionally stays unknown.
 4. **New document** creates separate document fields and a local vault view. Documents currently share one backend session ID.
 5. **Upload file** accepts TXT/MD/PDF/DOCX files up to 25 MB. TXT/MD and PDF extraction run in the browser; DOCX extraction uses the API and is also subject to API payload limits. The theme button switches between dark and light.
 
-Encoding replaces the selected document's local mapping snapshot with the API response. Vault edits are sent to the API when a session exists. Decode uses mappings from the backend session.
+Encoding replaces the selected document's local mapping snapshot with the API response. Manual rules are retained per document and sent on later Encode requests, including after a refresh. Adding a manual rule re-encodes the document so the output, server mappings and redacted archive agree. A session is created when saving a token before the first Encode. Decode uses mappings from the backend session.
 
 Inputs, outputs, mappings, view selection, and the session ID are saved in browser local storage and restored after refresh. The backend uses DynamoDB when `DYNAMODB_TABLE` is configured, with an in-memory fallback otherwise. `src/mocks/demo.ts` supplies example text only; detection is performed by the API. LLM calls remain outside this app.
 
