@@ -19,8 +19,8 @@ export type PersistedDoc = {
 
 export type PersistedState = {
   documents: PersistedDoc[]
-  activeEncode: number
-  activeVault: number
+  activeEncode: number | null
+  activeVault: number | null
   sessionId: string | null
   docCounter: number
 }
@@ -32,13 +32,14 @@ export function loadWorkspace(): PersistedState | null {
     const sessionId = window.localStorage.getItem(SESSION_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as { documents?: PersistedDoc[]; docCounter?: number }
-    const ui = uiRaw ? (JSON.parse(uiRaw) as { activeEncode?: number; activeVault?: number }) : {}
+    const ui = uiRaw ? (JSON.parse(uiRaw) as { activeEncode?: number | null; activeVault?: number | null }) : {}
     const documents = parsed.documents
-    if (!Array.isArray(documents) || documents.length === 0) return null
+    if (!Array.isArray(documents)) return null
+    const fallbackId = documents[0]?.id ?? null
     return {
       documents,
-      activeEncode: ui.activeEncode ?? documents[0].id,
-      activeVault: ui.activeVault ?? documents[0].id,
+      activeEncode: documents.length ? ui.activeEncode ?? fallbackId : null,
+      activeVault: documents.length ? ui.activeVault ?? fallbackId : null,
       sessionId,
       docCounter: parsed.docCounter ?? documents.length,
     }

@@ -68,7 +68,7 @@ h1 { font-size: 30px; letter-spacing: -.7px; line-height: 1.2; margin: 0 0 7px; 
 }
 .draft-token input { min-width: 180px; }
 
-.doctabs { display: flex; align-items: center; gap: 18px; border-bottom: 1px solid var(--line); margin-bottom: 24px; overflow-x: auto; }
+.doctabs { display: flex; align-items: stretch; gap: 18px; border-bottom: 1px solid var(--line); margin-bottom: 24px; overflow-x: auto; padding: 4px 2px 0; scrollbar-width: thin; }
 .doctab {
   display: flex;
   align-items: center;
@@ -82,15 +82,17 @@ h1 { font-size: 30px; letter-spacing: -.7px; line-height: 1.2; margin: 0 0 7px; 
   user-select: none;
 }
 .doctab.active { color: var(--text); border-bottom-color: var(--text); }
-.doctab-x {
-  opacity: 0;
-  font-size: 11px;
-  margin-left: 2px;
-  line-height: 1;
-}
-.doctab:hover .doctab-x { opacity: 0.65; }
-.doctab-x:hover { opacity: 1; color: #c44; }
-.doctab.add { color: var(--muted); opacity: 0.75; }
+.doctab-name, .doctab-control, .doctab.add { border: 0; background: none; font: inherit; }
+.doctab-name { min-height: 30px; padding: 4px 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; border-radius: 4px; }
+.doctab-control { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 30px; padding: 4px 6px; color: var(--muted); border-radius: 5px; }
+.doctab-control:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.doctab-x:hover:not(:disabled) { color: #c44; }
+.doctabs :focus-visible { outline-offset: -2px; }
+.doctab-rename { display: flex; align-items: center; gap: 8px; }
+.doctabs .doctab-rename input { width: 180px; min-height: 30px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--text); font: inherit; }
+.doctabs .doctab-rename input:focus-visible { border-color: #829fdb; outline: 1px solid #829fdb; outline-offset: 0; }
+.doctab-rename button[type="submit"] { color: var(--text); }
+.doctab.add { min-height: 30px; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); font-size: 13px; white-space: nowrap; opacity: 0.75; }
 .doctab.add:hover { opacity: 1; }
 .editors { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; }
 .editor { min-width: 0; }
@@ -146,6 +148,8 @@ td input { width: 100%; }
 .delete:hover:not(:disabled) { color: #ed8b8b; }
 .add-token { display: flex; justify-content: flex-end; margin-top: 10px; }
 .empty-state { text-align: center; padding: 32px; }
+.workspace-empty { padding: 48px 24px; border: 1px solid var(--line); border-radius: 11px; text-align: center; }
+.workspace-empty p { margin: 8px 0 20px; color: var(--muted); font-size: 13px; }
 @media (min-width: 1500px) { .app-shell { grid-template-columns: 278px minmax(0, 1fr); } }
 @media (max-width: 1050px) { .app-shell { grid-template-columns: 210px minmax(0, 1fr); } main { padding: 28px 24px; } .editors { grid-template-columns: 1fr; } }
 @media (max-width: 640px) {
@@ -167,6 +171,8 @@ td input { width: 100%; }
  .filter-bar { flex-wrap: wrap; gap: 10px; }
  .filter-bar input { flex-basis: 100%; }
  .danger { padding: 10px; font-size: 12px; }
+ .doctab-name { max-width: 160px; }
+ .doctabs .doctab-rename input { width: 140px; font-size: 16px; }
  .editor-heading > div { gap: 8px; }
  .quiet { min-height: 34px; }
  .row-actions { gap: 8px; }
