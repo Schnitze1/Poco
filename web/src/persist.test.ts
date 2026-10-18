@@ -66,6 +66,26 @@ describe('workspace persistence', () => {
     expect(loadSession()).toBeNull()
   })
 
+  it('keeps the workspace empty after the last document is closed and the page reloads', () => {
+    const workspace = exampleWorkspace()
+    workspace.documents = []
+    workspace.activeEncode = null
+    workspace.activeVault = null
+
+    saveWorkspace(workspace)
+
+    expect(loadWorkspace()).toEqual(workspace)
+    expect(loadSession()).toBe(workspace.sessionId)
+  })
+
+  it('clears stale selected document IDs when restoring an empty workspace', () => {
+    const workspace = exampleWorkspace()
+    workspace.documents = []
+    saveWorkspace(workspace)
+
+    expect(loadWorkspace()).toEqual({ ...workspace, activeEncode: null, activeVault: null })
+  })
+
   it('clears the previous session when saving a workspace without a session', () => {
     const workspace = exampleWorkspace()
     saveWorkspace(workspace)

@@ -119,8 +119,8 @@ function App() {
   /** 1. One shared documents array — single source of truth. */
   const [documents, setDocuments] = useState<Document[]>(() => restored?.documents ?? [newDocument(1)])
   /** 2. Two independent active-id pointers, one per view. */
-  const [activeEncode, setActiveEncode] = useState(restored?.activeEncode ?? 1)
-  const [activeVault, setActiveVault] = useState(restored?.activeVault ?? 1)
+  const [activeEncode, setActiveEncode] = useState<number | null>(restored ? restored.activeEncode : 1)
+  const [activeVault, setActiveVault] = useState<number | null>(restored ? restored.activeVault : 1)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [apiStatus, setApiStatus] = useState<string>('checking…')
@@ -133,9 +133,9 @@ function App() {
 
   const encoding = page === 'Encode'
   const activeViewId = page === 'Vault' ? activeVault : activeEncode
-  const active = documents.find((doc) => doc.id === activeViewId) ?? documents[0]
-  const input = encoding ? active.input : active.reply
-  const output = encoding ? active.output : active.restored
+  const active: Document | undefined = documents.find((doc) => doc.id === activeViewId) ?? documents[0]
+  const input = (encoding ? active?.input : active?.reply) ?? ''
+  const output = (encoding ? active?.output : active?.restored) ?? ''
 
   // Persist workspace (documents + view pointers + session) on every change.
   useEffect(() => {
@@ -182,18 +182,20 @@ function App() {
 
   /** Jump keeps the same document scoped in the destination view. */
   function jumpTo(target: Page) {
-    if (target === 'Vault') setActiveVault(activeEncode)
-    else setActiveEncode(activeVault)
+    if (active) {
+      if (target === 'Vault') setActiveVault(active.id)
+      else setActiveEncode(active.id)
+    }
     navigate(target)
   }
 
-  /** 4. Close reconciles BOTH views' active ids. × is only rendered when length > 1. */
+  /** Close reconciles both views, including an empty workspace. */
   function closeDocument(id: number) {
-    if (documents.length <= 1) return
     const remaining = documents.filter((doc) => doc.id !== id)
+    const nextId = remaining[0]?.id ?? null
     setDocuments(remaining)
-    if (activeEncode === id) setActiveEncode(remaining[0].id)
-    if (activeVault === id) setActiveVault(remaining[0].id)
+    if (activeEncode === id || !remaining.length) setActiveEncode(nextId)
+    if (activeVault === id || !remaining.length) setActiveVault(nextId)
     setNotice('Document closed.')
     setDraftToken(null)
   }
@@ -211,6 +213,7 @@ function App() {
   }
 
   async function encode() {
+    if (!active) return
     setBusy(true)
     setNotice('')
     const documentId = active.id
@@ -240,6 +243,7 @@ function App() {
   }
 
   async function decode() {
+    if (!active) return
     if (!sessionId) {
       setNotice('No session yet. Encode text first so the server can store mappings.')
       return
@@ -265,7 +269,7 @@ function App() {
   }
 
   async function changeMappings(mappings: Mapping[]): Promise<boolean> {
-    if (busy) return false
+    if (busy || !active) return false
     const document = active
     const sid = sessionId ?? crypto.randomUUID()
     setBusy(true)
@@ -304,6 +308,7 @@ function App() {
   }
 
   function addTokenFromWord(word: string) {
+    if (!active) return
     setDraftToken({ value: word, cls: guessClass(word), returnToEncode: true })
     setActiveVault(active.id)
     setPage('Vault')
@@ -311,7 +316,7 @@ function App() {
   }
 
   async function commitDraftToken() {
-    if (!draftToken || busy || !draftToken.value.trim()) return
+    if (!active || !draftToken || busy || !draftToken.value.trim()) return
     const draft = draftToken
     const document = active
     const value = draft.value.trim()
@@ -364,7 +369,7 @@ function App() {
    * DOCX still goes through /extract (base64) — those files are much smaller.
    */
   async function upload(file?: File) {
-    if (!file) return
+    if (!file || !active) return
     if (!/\.(txt|md|pdf|docx)$/i.test(file.name)) {
       setNotice('Choose a .txt, .md, .pdf, or .docx file.')
       return
@@ -468,7 +473,7 @@ function App() {
               <p>{descriptions[page]}</p>
             </div>
             <div className="page-actions">
-              {page === 'Vault' && (
+              {active && page === 'Vault' && (
                 <button
                   className="danger"
                   disabled={busy || !active.mappings.length}
@@ -493,20 +498,34 @@ function App() {
           </div>
 
           {/* Shared strip: each view passes its own activeId + switch callback */}
-          <DocumentTabs
-            documents={tabDocs}
-            activeId={active.id}
-            onSelect={(id) => {
-              if (page === 'Vault') setActiveVault(id)
-              else setActiveEncode(id)
-              setNotice('')
-              setDraftToken(null)
-            }}
-            onClose={closeDocument}
-            onAdd={addDocument}
-          />
+          {active && (
+            <DocumentTabs
+              documents={tabDocs}
+              activeId={active.id}
+              onSelect={(id) => {
+                if (page === 'Vault') setActiveVault(id)
+                else setActiveEncode(id)
+                setNotice('')
+                setDraftToken(null)
+              }}
+              onClose={closeDocument}
+              onAdd={addDocument}
+              onRename={(id, name) => {
+                updateDocument(id, { name })
+                setNotice('Document renamed.')
+              }}
+            />
+          )}
 
-          {page !== 'Vault' && (
+          {!active && (
+            <section className="workspace-empty" aria-labelledby="workspace-empty-title">
+              <h2 id="workspace-empty-title">No documents open</h2>
+              <p>Create a document to get started.</p>
+              <button className="secondary" autoFocus onClick={addDocument}>New document</button>
+            </section>
+          )}
+
+          {active && page !== 'Vault' && (
             <>
               <div className="editors">
                 <section className="editor">
@@ -522,7 +541,7 @@ function App() {
                           updateDocument(
                             active.id,
                             encoding
-                              ? { input: sampleText, name: 'onboarding-dossier.txt', output: '' }
+                              ? { input: sampleText, output: '' }
                               : { reply: sampleReply, restored: '', unknown: [] }
                           )
                           setNotice('Example loaded.')
@@ -620,7 +639,7 @@ function App() {
             </>
           )}
 
-          {page === 'Vault' && (
+          {active && page === 'Vault' && (
             <>
               {draftToken && (
                 <form className="draft-token" aria-label="New token" onSubmit={(event) => { event.preventDefault(); void commitDraftToken() }}>
