@@ -66,6 +66,16 @@ describe('workspace persistence', () => {
     expect(loadSession()).toBeNull()
   })
 
+  it('restores manual redactions and exclusions independently for each document', () => {
+    const workspace = exampleWorkspace()
+    workspace.documents[0].excludedValues = ['alice@example.com']
+    workspace.documents[1].manualMappings = [{ token: 'Custom_1', value: 'readout', category: 'Custom', firstOffset: 0 }]
+    saveWorkspace(workspace)
+
+    expect(loadWorkspace()).toEqual(workspace)
+    expect(loadWorkspace()?.documents[1].excludedValues).toBeUndefined()
+  })
+
   it('keeps the workspace empty after the last document is closed and the page reloads', () => {
     const workspace = exampleWorkspace()
     workspace.documents = []

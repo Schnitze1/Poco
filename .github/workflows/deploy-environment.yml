@@ -246,7 +246,7 @@ jobs:
             })
             await page.goto('http://127.0.0.1:4173')
             await page.waitForFunction(stage => document.querySelector('.demo-note')?.textContent.includes(`API ${stage} ·`), process.env.API_STAGE)
-            const input = page.getByLabel('Input', { exact: true })
+            const input = page.getByLabel('Original text', { exact: true })
             // Use real pointer/keyboard input: fill() alone misses overlays blocking users.
             await input.click()
             await input.pressSequentially(source)
@@ -256,9 +256,26 @@ jobs:
               page.getByRole('button', { name: 'Encode', exact: true }).click(),
             ])
             assert.equal(encoded.status(), 200)
-            const result = await encoded.json()
+            let result = await encoded.json()
             assert.equal(result.sessionId, session)
             assert.equal(result.redactedText, 'Contact [Email_1]')
+            await page.waitForFunction(text => document.querySelector('pre.output')?.textContent === text, result.redactedText)
+
+            // A value stays visible across refresh and Encode, then can be redacted again in place.
+            await page.getByRole('button', { name: 'Unredact pipeline-demo@example.com', exact: true }).click()
+            await page.waitForFunction(text => document.querySelector('pre.output')?.textContent === text, source)
+            await page.reload()
+            await page.getByLabel('Original text', { exact: true }).waitFor()
+            await page.getByRole('button', { name: 'Encode', exact: true }).click()
+            await page.getByRole('status').filter({ hasText: 'values replaced' }).waitFor()
+            assert.equal(await page.locator('pre.output').textContent(), source)
+            const [redactedAgain] = await Promise.all([
+              page.waitForResponse(response => response.url() === `${api}/encode` && response.request().method() === 'POST'),
+              page.getByRole('button', { name: 'Redact pipeline-demo@example.com', exact: true }).click(),
+            ])
+            assert.equal(redactedAgain.status(), 200)
+            result = await redactedAgain.json()
+            assert.equal(result.mappings.length, 1)
             await page.waitForFunction(text => document.querySelector('pre.output')?.textContent === text, result.redactedText)
             await page.screenshot({ path: join(evidence, 'encode.png'), fullPage: true })
             await page.getByRole('navigation').getByRole('button', { name: /^Vault/ }).click()
@@ -268,18 +285,18 @@ jobs:
             await page.reload()
             assert.equal(await page.evaluate(() => localStorage.getItem('poco.sessionId')), session)
             await page.getByRole('navigation').getByRole('button', { name: /^Decode/ }).click()
-            await page.getByLabel('Input', { exact: true }).fill(result.redactedText)
+            await page.getByLabel('Redacted text', { exact: true }).fill(result.redactedText)
             await page.getByRole('button', { name: 'Decode', exact: true }).click()
             await page.waitForFunction(text => document.querySelector('pre.output')?.textContent === text, source)
             await page.screenshot({ path: join(evidence, 'decode.png'), fullPage: true })
-            await page.getByLabel('Input', { exact: true }).fill(`${result.redactedText} [Person_99]`)
+            await page.getByLabel('Redacted text', { exact: true }).fill(`${result.redactedText} [Person_99]`)
             await page.getByRole('button', { name: 'Decode', exact: true }).click()
             await page.waitForFunction(text => document.querySelector('pre.output')?.textContent === text, `${source} [Person_99]`)
             await page.getByRole('alert').filter({ hasText: '[Person_99]' }).waitFor()
             await page.screenshot({ path: join(evidence, 'unknown-token.png'), fullPage: true })
             assert.deepEqual(errors, [], 'Browser or API errors occurred')
             assert.equal(preview.exitCode, null, 'Preview server exited during acceptance')
-            console.log('Browser acceptance passed: Encode, Vault, refresh, Decode and unknown-token warning.')
+            console.log('Browser acceptance passed: Encode, click-to-toggle, exclusion persistence, Vault, Decode and unknown-token warning.')
           } catch (error) {
             writeFileSync(join(evidence, 'failure.txt'), String(error.stack || error))
             if (page) await page.screenshot({ path: join(evidence, 'failure.png'), fullPage: true }).catch(() => {})

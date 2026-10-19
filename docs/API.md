@@ -93,8 +93,11 @@ Redact PII in free text and store mappings under `sessionId`.
 | `sessionId` | string | no | Session id to store/merge mappings into. Omitted → server returns a new UUID. |
 | `text` | string | yes | Raw document text (not file upload in v1). |
 | `manualMappings` | array | no | Literal, case-sensitive redaction rules: `{token, value, sourceValue?}`. `sourceValue` retains the original text when its decode value is edited. |
+| `excludedValues` | string[] | no | Values the user chose to leave visible. Suppresses automatic redactions; explicit manual rules can redact them again. Maximum 1000 nonempty values. |
 
 Manual rules are applied before mappings and the redacted S3 archive are stored. Re-send the document's rules on later Encode requests to retain them. Tokens must have a class and positive numeric suffix, such as `Custom_1`; tokens and source values must be unique. Invalid rules return HTTP 400. Automatic tokens are renumbered when needed to avoid collisions.
+
+Exclusions are applied during automatic encoding, before manual rules and storage. The response echoes `excludedValues`; re-send them on subsequent Encode requests to keep those values visible. Person-name exclusions also cover titled/bare forms of the same full name. Existing session mappings for excluded values are removed when their tokens are no longer present in the result.
 
 **200**
 

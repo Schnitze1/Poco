@@ -221,6 +221,33 @@ fn inside_token(text: &str, pos: usize) -> bool {
     }
 }
 
+/// Replace complete readable tokens once; never scan newly inserted literal text.
+fn replace_readable_tokens(text: &str, replacements: &std::collections::HashMap<String, String>) -> String {
+    let capacity = text.len();
+    let mut out = String::with_capacity(capacity);
+    let mut cursor = 0;
+    while let Some(relative) = text[cursor..].find('[') {
+        let start = cursor + relative;
+        let Some(close) = text[start..].find(']') else { break };
+        let end = start + close + 1;
+        out.push_str(&text[cursor..start]);
+        let token = &text[start..end];
+        let replacement = replacements.get(token).map(String::as_str).unwrap_or(token);
+        out.push_str(replacement);
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
+}
+
+fn exclusion_marker(source: &str, output: &str, index: &mut usize) -> String {
+    loop {
+        let marker = format!("[\u{E000}excluded_{index}\u{E001}]");
+        *index += 1;
+        if !source.contains(&marker) && !output.contains(&marker) { return marker }
+    }
+}
+
 /// If a name title sits immediately before `name_start`, return the title start.
 fn extend_title_start(text: &str, name_start: usize) -> usize {
     const TITLES: [&str; 12] = [
@@ -489,6 +516,12 @@ impl Vault {
     }
 
     pub fn encode(&self, text: &str) -> Result<EncodedOutput, VaultError> {
+        self.encode_with_exclusions(text, &[])
+    }
+
+    /// Suppress selected automatic values while preserving the exact detected text.
+    /// Callers re-send exclusions for each document encode; manual rules can override them.
+    pub fn encode_with_exclusions(&self, text: &str, excluded_values: &[String]) -> Result<EncodedOutput, VaultError> {
         let result = self.pipeline.redact(&self.session, gaze::RawDocument::Text(text.to_string()))
             .map_err(|e| VaultError::Pipeline(e.to_string()))?;
 
@@ -498,6 +531,8 @@ impl Vault {
 
         let mut mappings: Vec<TokenMapping> = Vec::new();
         let mut readable_redacted_text = clean_text.clone();
+        let mut restored = std::collections::HashMap::new();
+        let mut placeholder_index = 0;
 
         // Gaze emits <session_hex:Class_N>. When the source span was already wrapped
         // in <angle brackets>, the redacted form is <<session_hex:Class_N>>.
@@ -513,6 +548,19 @@ impl Vault {
                 .map(|v| v.to_string());
 
             if let Some(original_value) = original_value {
+                let is_name = class_name.contains("Name") || class_name.contains("name");
+                let core = person_core_name(&original_value).to_lowercase();
+                let excluded = excluded_values.iter().any(|value| {
+                    let excluded_core = person_core_name(value).to_lowercase();
+                    original_value == *value || (is_name && core == excluded_core)
+                });
+                if excluded {
+                    let marker = exclusion_marker(text, &readable_redacted_text, &mut placeholder_index);
+                    readable_redacted_text = readable_redacted_text.replace(&tok.raw, &marker);
+                    restored.insert(marker, original_value);
+                    cursor = tok.span.end;
+                    continue;
+                }
                 let first_offset = text.find(&original_value).unwrap_or(usize::MAX);
                 if let Some(existing) = mappings
                     .iter_mut()
@@ -541,6 +589,27 @@ impl Vault {
             .replace("]>>", "]")
             .replace("<[", "[")
             .replace("]>", "]");
+
+        // Keep excluded raw mentions protected until name expansion has finished.
+        // Otherwise another person's shared first/last name could redact them again.
+        let mut literals = Vec::new();
+        for value in excluded_values {
+            let literal = value.as_str();
+            literals.push(literal);
+            let core = person_core_name(value);
+            literals.push(core);
+        }
+        literals.sort_by_key(|value| {
+            let length = value.len();
+            std::cmp::Reverse(length)
+        });
+        for literal in literals {
+            if literal.is_empty() || !readable_redacted_text.contains(literal) { continue }
+            let marker = exclusion_marker(text, &readable_redacted_text, &mut placeholder_index);
+            readable_redacted_text = replace_whole_words(&readable_redacted_text, literal, &marker, false);
+            let value = literal.to_string();
+            restored.insert(marker, value);
+        }
 
         // Session accumulation: one readable token per distinct original value, so
         // repeated mentions share [Class_N] even if gaze emitted sibling counters.
@@ -704,6 +773,7 @@ impl Vault {
         // Keep Class_N counters aligned with first_offset inside each family
         // (Name_1 is always the earliest name in the source, …).
         renumber_tokens_by_first_offset(&mut deduped, &mut readable_redacted_text);
+        readable_redacted_text = replace_readable_tokens(&readable_redacted_text, &restored);
 
         Ok(EncodedOutput {
             redacted_text: readable_redacted_text,
@@ -1703,6 +1773,51 @@ internal tracking code ABC-1234 and portal version 1.2.3
             "Please contact [Name_1] about her onboarding.\n\nEmail: [Email_1]\nPhone: [Phone_1]\n\n[Name_1] would like a confirmation by email."
         );
         assert_eq!(encoded.mappings.len(), 3);
+    }
+
+    #[test]
+    fn exclusions_keep_repeated_values_visible_and_can_be_removed() {
+        let vault = Vault::new().unwrap();
+        let source = "Contact Sarah Mitchell at sarah@example.com.\nSarah Mitchell will reply.";
+        let excluded = vec!["Sarah Mitchell".to_string()];
+        let encoded = vault.encode_with_exclusions(source, &excluded).unwrap();
+        assert_eq!(encoded.redacted_text, "Contact Sarah Mitchell at [Email_1].\nSarah Mitchell will reply.");
+        assert_eq!(encoded.mappings.len(), 1);
+        let decoded = vault.decode(&encoded.redacted_text, &encoded.mappings).unwrap();
+        assert_eq!(decoded.restored_text, source);
+        let again = vault.encode(source).unwrap();
+        assert!(!again.redacted_text.contains("Sarah Mitchell"));
+    }
+
+    #[test]
+    fn exclusions_preserve_titled_and_bare_mentions_exactly() {
+        let vault = Vault::new().unwrap();
+        let source = "Contact Dr. Sarah Mitchell. Sarah Mitchell will reply. Sarah called.";
+        let excluded = vec!["Dr. Sarah Mitchell".to_string()];
+        let encoded = vault.encode_with_exclusions(source, &excluded).unwrap();
+        assert_eq!(encoded.redacted_text, source);
+        assert!(encoded.mappings.is_empty());
+    }
+
+    #[test]
+    fn exclusions_protect_full_names_from_other_people_with_shared_parts() {
+        let vault = Vault::new().unwrap();
+        let source = "Contact Sarah Mitchell. Contact Sarah Jones.\nSarah Mitchell will reply.";
+        let excluded = vec!["Sarah Mitchell".to_string()];
+        let encoded = vault.encode_with_exclusions(source, &excluded).unwrap();
+        assert_eq!(encoded.redacted_text, "Contact Sarah Mitchell. Contact [Name_1].\nSarah Mitchell will reply.");
+        assert_eq!(encoded.mappings.len(), 1);
+        assert_eq!(encoded.mappings[0].value, "Sarah Jones");
+    }
+
+    #[test]
+    fn exclusions_do_not_touch_existing_tokens_or_colliding_literal_markers() {
+        let vault = Vault::new().unwrap();
+        let source = "[\u{E000}excluded_0\u{E001}] Contact sarah@example.com and [Email_1].";
+        let excluded = vec!["sarah@example.com".to_string()];
+        let encoded = vault.encode_with_exclusions(source, &excluded).unwrap();
+        assert_eq!(encoded.redacted_text, source);
+        assert!(encoded.mappings.is_empty());
     }
 
     #[test]
