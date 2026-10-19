@@ -279,10 +279,28 @@ fn replace_whole_words(text: &str, needle: &str, token: &str, allow_title: bool)
     out
 }
 
-/// Redact bare first/last names that match an already-tokenised PERSON mapping.
+/// Redact full names, then bare first/last names matching a PERSON mapping.
 /// Case-sensitive whole words only; never touches text inside `[...]`.
 fn expand_known_person_names(text: &str, mappings: &[TokenMapping]) -> String {
     let mut out = text.to_string();
+    // Protect complete mentions before a first/last-name pass can split them into
+    // two tokens. Match every person's full name before expanding anyone's parts;
+    // longest names win when one known name is a suffix of another.
+    let mut full_names: Vec<_> = mappings
+        .iter()
+        .filter(|m| m.class.contains("Name") || m.class.contains("name"))
+        .collect();
+    full_names.sort_by_key(|m| {
+        let core = person_core_name(&m.value);
+        let length = core.len();
+        std::cmp::Reverse(length)
+    });
+    for m in full_names {
+        let core = person_core_name(&m.value);
+        let token = format!("[{}]", m.class);
+        out = replace_whole_words(&out, core, &token, true);
+    }
+
     for m in mappings {
         let is_name = m.class.contains("Name") || m.class.contains("name");
         if !is_name {
@@ -1639,6 +1657,53 @@ internal tracking code ABC-1234 and portal version 1.2.3
     // ---------- CHANGE 2 — mapping display order by first appearance ----------
 
     // ---------- Session-known-name lookup (bare first / last) ----------
+
+    #[test]
+    fn session_name_repeated_full_name_uses_one_token_per_mention() {
+        let mappings = vec![map_token("Name_1", "Sarah Mitchell")];
+        let text = "Contact [Name_1]. Sarah Mitchell will confirm. Sarah called Mitchell.";
+
+        assert_eq!(
+            expand_known_person_names(text, &mappings),
+            "Contact [Name_1]. [Name_1] will confirm. [Name_1] called [Name_1]."
+        );
+    }
+
+    #[test]
+    fn session_name_matches_all_full_names_before_any_name_parts() {
+        let mappings = vec![
+            map_token("Name_1", "Sarah Mitchell"),
+            map_token("Name_2", "Mitchell Jones"),
+            map_token("Name_3", "Anne Mitchell Jones"),
+        ];
+
+        assert_eq!(
+            expand_known_person_names("Sarah Mitchell met Mitchell Jones and Anne Mitchell Jones.", &mappings),
+            "[Name_1] met [Name_2] and [Name_3]."
+        );
+    }
+
+    #[test]
+    fn session_name_full_mentions_preserve_unicode_and_punctuation() {
+        let mappings = vec![map_token("Name_1", "José Müller")];
+
+        assert_eq!(
+            expand_known_person_names("Dr. José Müller, José Müller! [Name_1]", &mappings),
+            "[Name_1], [Name_1]! [Name_1]"
+        );
+    }
+
+    #[test]
+    fn web_example_repeated_name_redacts_once_and_round_trips() {
+        let input = "Please contact Sarah Mitchell about her onboarding.\n\nEmail: sarah@example.com\nPhone: +61 412 345 678\n\nSarah Mitchell would like a confirmation by email.";
+        let encoded = assert_round_trips(input);
+
+        assert_eq!(
+            encoded.redacted_text,
+            "Please contact [Name_1] about her onboarding.\n\nEmail: [Email_1]\nPhone: [Phone_1]\n\n[Name_1] would like a confirmation by email."
+        );
+        assert_eq!(encoded.mappings.len(), 3);
+    }
 
     #[test]
     fn session_name_expands_bare_first_name() {
