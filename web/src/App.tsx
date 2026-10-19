@@ -17,7 +17,7 @@ import { loadWorkspace, saveWorkspace, loadSession, saveSession } from './persis
 import type { DocTab } from './types'
 import { DocumentTabs } from './components/DocumentTabs'
 import { Vault } from './components/Vault'
-import { nextManualToken, updateRedactedOutput } from './manualRedaction'
+import { nextManualToken, redactableTextParts, updateRedactedOutput } from './manualRedaction'
 import './App.css'
 
 type Page = 'Encode' | 'Decode' | 'Vault'
@@ -33,6 +33,7 @@ type Document = {
   mappings: Mapping[]
   nextIdx: Record<string, number>
   manualMappings?: Mapping[]
+  excludedValues?: string[]
 }
 
 function newDocument(id: number, name?: string): Document {
@@ -75,17 +76,20 @@ function NavIcon({ page }: { page: Page }) {
   )
 }
 
-function TokenText({ text, mappings, onPick, busy }: {
-  text: string; mappings: Mapping[]; onPick: (word: string) => void; busy: boolean
+function TokenText({ text, mappings, excludedValues, onPick, onRestore, busy }: {
+  text: string; mappings: Mapping[]; excludedValues: string[]
+  onPick: (word: string) => void; onRestore: (mapping: Mapping) => void; busy: boolean
 }) {
   return text.split(/(\[[A-Za-z][A-Za-z0-9_:]*_\d+\])/g).map((part, index) => {
     const mapping = mappings.find((m) => `[${m.token}]` === part)
-    if (mapping) return <mark key={index} className={`token-${mapping.category.toLowerCase()}`}>{part}</mark>
+    if (mapping) return <button key={index} type="button" className={`token-restore token-${mapping.category.toLowerCase()}`}
+      disabled={busy} aria-label={`Unredact ${mapping.value}`} title="Click to unredact this value"
+      onClick={() => onRestore(mapping)}>{part}</button>
     if (index % 2) return part
-    return <span key={index}>{part.split(/([\p{L}\p{N}][\p{L}\p{N}'’@_+-]*(?:\.[\p{L}\p{N}'’@_+-]+)*)/gu).map((word, i) => (
+    return <span key={index}>{redactableTextParts(part, excludedValues).map((word, i) => (
       i % 2 && word.length >= 2
         ? <button key={i} type="button" className="word-redact" disabled={busy}
-            aria-label={`Redact ${word}`} title="Create a token for this text" onClick={() => onPick(word)}>{word}</button>
+            aria-label={`Redact ${word}`} title="Click to redact this text" onClick={() => onPick(word)}>{word}</button>
         : word
     ))}</span>
   })
@@ -125,7 +129,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [apiStatus, setApiStatus] = useState<string>('checking…')
   const [sessionId, setSessionId] = useState<string | null>(loadSessionId)
-  const [draftToken, setDraftToken] = useState<{ value: string; cls: string; returnToEncode?: boolean } | null>(null)
+  const [draftToken, setDraftToken] = useState<{ value: string; cls: string } | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   /** 3. Naming counter only — never used as an id. */
@@ -158,7 +162,7 @@ function App() {
       listMappings(sid)
         .then((res) => {
           setDocuments((prev) => {
-            if (prev.some((d) => d.mappings.length > 0)) return prev
+            if (prev.some((d) => d.mappings.length > 0 || d.excludedValues?.length)) return prev
             return prev.map((d, i) => (i === 0 ? { ...d, mappings: res.mappings } : d))
           })
         })
@@ -212,28 +216,31 @@ function App() {
     setDraftToken(null)
   }
 
+  async function syncRedactions(document: Document, manualMappings = document.manualMappings ?? [], excludedValues = document.excludedValues ?? []) {
+    const result = await encodeText(sessionId, document.input, undefined, manualMappings, excludedValues)
+    for (const old of document.mappings) {
+      if (!result.mappings.some(mapping => mapping.token === old.token)) await deleteMapping(result.sessionId, old.token)
+    }
+    const nextIdx = { ...document.nextIdx }
+    for (const mapping of result.mappings) {
+      const index = Number(mapping.token.match(/_(\d+)$/)?.[1] ?? 0)
+      nextIdx[mapping.category] = Math.max(nextIdx[mapping.category] ?? 1, index + 1)
+    }
+    updateDocument(document.id, {
+      output: result.redactedText, mappings: result.mappings, manualMappings, excludedValues,
+      restored: '', unknown: [], nextIdx,
+    })
+    saveSessionId(result.sessionId)
+    setSessionId(result.sessionId)
+    return result
+  }
+
   async function encode() {
-    if (!active) return
+    if (!active || busy) return
     setBusy(true)
     setNotice('')
-    const documentId = active.id
     try {
-      const result = await encodeText(sessionId, active.input, undefined, active.manualMappings ?? [])
-      saveSessionId(result.sessionId)
-      setSessionId(result.sessionId)
-      const nextIdx: Record<string, number> = {}
-      for (const m of result.mappings) {
-        const cls = m.category || 'Custom'
-        const n = Number((m.token.match(/_(\d+)$/) ?? [])[1] ?? '1')
-        nextIdx[cls] = Math.max(nextIdx[cls] ?? 1, n + 1)
-      }
-      updateDocument(documentId, {
-        output: result.redactedText,
-        mappings: result.mappings,
-        restored: '',
-        unknown: [],
-        nextIdx,
-      })
+      const result = await syncRedactions(active)
       setNotice(`${result.mappings.length} values replaced · session ${result.sessionId.slice(0, 8)}…`)
     } catch (e) {
       setNotice(`Encode failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -307,12 +314,41 @@ function App() {
     }
   }
 
-  function addTokenFromWord(word: string) {
-    if (!active) return
-    setDraftToken({ value: word, cls: guessClass(word), returnToEncode: true })
-    setActiveVault(active.id)
-    setPage('Vault')
-    setNotice('Choose a class and save to redact this text.')
+  async function addTokenFromWord(word: string) {
+    if (!active || busy || !word.trim()) return
+    const category = guessClass(word)
+    const token = nextManualToken(category, documents.flatMap(doc => doc.mappings), active.nextIdx)
+    const mapping: Mapping = { token, value: word, category, firstOffset: Math.max(0, active.input.indexOf(word)) }
+    const rules = [...(active.manualMappings ?? []), mapping]
+    const excludedValues = (active.excludedValues ?? []).filter(value => value !== word)
+    setBusy(true)
+    setNotice('')
+    try {
+      await syncRedactions(active, rules, excludedValues)
+      setNotice('Text redacted. Click its token to restore it.')
+    } catch (e) {
+      setNotice(`Redaction failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function restoreToken(mapping: Mapping) {
+    if (!active || busy) return
+    const rule = active.manualMappings?.find(entry => entry.token === mapping.token)
+    const sourceValue = rule?.sourceValue ?? rule?.value ?? mapping.value
+    const rules = (active.manualMappings ?? []).filter(entry => entry.token !== mapping.token)
+    const excludedValues = [...new Set([...(active.excludedValues ?? []), sourceValue, mapping.value])]
+    setBusy(true)
+    setNotice('')
+    try {
+      await syncRedactions(active, rules, excludedValues)
+      setNotice('Text restored. It will stay visible when you encode again.')
+    } catch (e) {
+      setNotice(`Unredaction failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function commitDraftToken() {
@@ -335,7 +371,7 @@ function App() {
       let output = document.output
       if (document.input.trim()) {
         // Apply manual rules on the server so the redacted output, mappings and S3 archive agree.
-        const result = await encodeText(sid, document.input, undefined, manualMappings)
+        const result = await encodeText(sid, document.input, undefined, manualMappings, document.excludedValues ?? [])
         mappings = result.mappings
         output = result.redactedText
       } else {
@@ -350,10 +386,6 @@ function App() {
       saveSessionId(sid)
       setSessionId(sid)
       setDraftToken(current => current === draft ? null : current)
-      if (draft.returnToEncode) {
-        setActiveEncode(document.id)
-        setPage('Encode')
-      }
       setNotice(document.input.trim() ? 'Token saved and redacted output updated.' : 'Token saved to the server vault.')
     } catch (e) {
       // Keep the form and its value available for correction/retry.
@@ -415,7 +447,7 @@ function App() {
   }
 
   const descriptions = {
-    Encode: 'Replace sensitive information with tokens. Click missed text in the output to add a token.',
+    Encode: 'Click a word to redact it. Click a token to restore its text.',
     Decode: 'Restore tokens using the server session vault.',
     Vault: 'Inspect and edit mappings for the active document.',
   }
@@ -530,7 +562,7 @@ function App() {
               <div className="editors">
                 <section className="editor">
                   <div className="editor-heading">
-                    <label htmlFor="source-input">Input</label>
+                    <label htmlFor="source-input">{encoding ? 'Original text' : 'Redacted text'}</label>
                     <div>
                       <button className="quiet" onClick={() => fileInput.current?.click()}>
                         Upload file
@@ -579,7 +611,7 @@ function App() {
                       placeholder={
                         encoding
                           ? 'Type or paste text here, or upload a file…'
-                          : 'Paste text with tokens here or upload a file…'
+                          : 'Paste text with redactions here, or upload a file…'
                       }
                       spellCheck={false}
                     />
@@ -587,7 +619,7 @@ function App() {
                 </section>
                 <section className="editor">
                   <div className="editor-heading">
-                    <h2 id="output-label">Output</h2>
+                    <h2 id="output-label">{encoding ? 'Redacted text' : 'Restored text'}</h2>
                     <button className="quiet" disabled={!output} onClick={() => copy(output)}>
                       Copy
                     </button>
@@ -595,7 +627,8 @@ function App() {
                   <pre className="output" tabIndex={0} aria-labelledby="output-label">
                     {output ? (
                       encoding ? (
-                        <TokenText text={output} mappings={active.mappings} onPick={addTokenFromWord} busy={busy} />
+                        <TokenText text={output} mappings={active.mappings} excludedValues={active.excludedValues ?? []}
+                          onPick={(word) => void addTokenFromWord(word)} onRestore={(mapping) => void restoreToken(mapping)} busy={busy} />
                       ) : (
                         output
                       )
@@ -622,7 +655,7 @@ function App() {
                     const el = inputRef.current
                     const word = el ? wordAtSelection(el) : ''
                     if (encoding && word.length >= 2) {
-                      addTokenFromWord(word)
+                      void addTokenFromWord(word)
                       return
                     }
                     jumpTo('Vault')

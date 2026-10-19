@@ -351,6 +351,24 @@ pub async fn route(method: &str, path: &str, body: &str) -> Response<String> {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+        let excluded_values: Vec<String> = match parsed.get("excludedValues") {
+            Some(raw) => {
+                let raw = raw.clone();
+                match serde_json::from_value(raw) {
+                    Ok(values) => values,
+                    Err(_) => {
+                        let b = err_body("excludedValues must be an array of strings");
+                        return json_response(400, b);
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
+        if excluded_values.len() > 1000 || excluded_values.iter().any(|value| value.trim().is_empty()) {
+            let b = err_body("excludedValues requires at most 1000 nonempty values");
+            return json_response(400, b);
+        }
+
         let vault = match Vault::new() {
             Ok(v) => v,
             Err(e) => {
@@ -359,7 +377,7 @@ pub async fn route(method: &str, path: &str, body: &str) -> Response<String> {
                 return json_response(500, b);
             }
         };
-        let mut encoded = match vault.encode(&text) {
+        let mut encoded = match vault.encode_with_exclusions(&text, &excluded_values) {
             Ok(e) => e,
             Err(e) => {
                 let msg = format!("{e:?}");
@@ -379,6 +397,27 @@ pub async fn route(method: &str, path: &str, body: &str) -> Response<String> {
             if let Err(e) = manual::apply(&mut encoded, &text, &rules) {
                 let b = err_body(&e);
                 return json_response(400, b);
+            }
+        }
+        // DynamoDB upserts retain older session tokens. Remove excluded mappings
+        // that are absent from the current result before saving its remaining tokens.
+        if !excluded_values.is_empty() {
+            let previous = match load_mappings(&session_id).await {
+                Ok(mappings) => mappings,
+                Err(e) => {
+                    let b = err_body(&e);
+                    return json_response(500, b);
+                }
+            };
+            for mapping in previous {
+                if excluded_values.contains(&mapping.value)
+                    && !encoded.mappings.iter().any(|next| next.class == mapping.class)
+                {
+                    if let Err(e) = delete_mapping(&session_id, &mapping.class).await {
+                        let b = err_body(&e);
+                        return json_response(500, b);
+                    }
+                }
             }
         }
         if let Err(e) = store_mappings(&session_id, &encoded.mappings).await {
@@ -402,6 +441,7 @@ pub async fn route(method: &str, path: &str, body: &str) -> Response<String> {
             "sessionId": session_id,
             "redactedText": encoded.redacted_text,
             "mappings": mappings,
+            "excludedValues": excluded_values,
             "stats": stats
         });
         let body = out.to_string();
@@ -624,6 +664,47 @@ mod tests {
         let body = resp.body();
         assert!(body.contains("[Email_1]"), "body: {body}");
         assert!(body.contains("sessionId"), "body: {body}");
+    }
+
+    #[tokio::test]
+    async fn encode_exclusions_restore_values_and_remove_session_mappings() {
+        let source = "Contact sarah@example.com. Email sarah@example.com again.";
+        let sid = "test-click-unredact";
+        let first = route("POST", "/encode", &json!({"sessionId":sid,"text":source}).to_string()).await;
+        assert_eq!(first.status().as_u16(), 200);
+        let request = json!({"sessionId":sid,"text":source,"excludedValues":["sarah@example.com"]});
+        for _ in 0..2 {
+            let response = route("POST", "/encode", &request.to_string()).await;
+            assert_eq!(response.status().as_u16(), 200);
+            let data: serde_json::Value = serde_json::from_str(response.body()).unwrap();
+            assert_eq!(data["redactedText"], source);
+            assert_eq!(data["mappings"], json!([]));
+            assert_eq!(data["excludedValues"], request["excludedValues"]);
+        }
+        let mappings = load_mappings(sid).await.unwrap();
+        assert!(mappings.is_empty());
+        let again = route("POST", "/encode", &json!({"sessionId":sid,"text":source}).to_string()).await;
+        assert!(again.body().contains("[Email_1]"));
+    }
+
+    #[tokio::test]
+    async fn encode_manual_rules_can_redact_excluded_values_again() {
+        let request = json!({"text":"Contact sarah@example.com.","excludedValues":["sarah@example.com"],
+            "manualMappings":[{"token":"Custom_1","value":"sarah@example.com"}]});
+        let response = route("POST", "/encode", &request.to_string()).await;
+        assert_eq!(response.status().as_u16(), 200);
+        let data: serde_json::Value = serde_json::from_str(response.body()).unwrap();
+        assert_eq!(data["redactedText"], "Contact [Custom_1].");
+        assert_eq!(data["mappings"][0]["value"], "sarah@example.com");
+    }
+
+    #[tokio::test]
+    async fn encode_rejects_invalid_exclusions() {
+        for excluded in [json!("Sarah"), json!([1]), json!([""]), json!(["  "]), json!(vec!["value"; 1001])] {
+            let request = json!({"text":"Contact Sarah Mitchell.","excludedValues":excluded});
+            let response = route("POST", "/encode", &request.to_string()).await;
+            assert_eq!(response.status().as_u16(), 400, "{}", response.body());
+        }
     }
 
     #[tokio::test]
