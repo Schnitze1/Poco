@@ -11,6 +11,7 @@ export type EncodeResult = {
   redactedText: string
   mappings: Mapping[]
   stats: { totalEntities: number; durationMs: number }
+  excludedValues?: string[]
 }
 
 export type DecodeResult = {
@@ -56,10 +57,12 @@ export async function encodeText(
   text: string,
   file?: { fileName: string; fileBase64?: string; s3Key?: string },
   manualMappings: Mapping[] = [],
+  excludedValues: string[] = [],
 ): Promise<EncodeResult> {
   const body: Record<string, unknown> = {}
   if (sessionId) body.sessionId = sessionId
   if (manualMappings.length) body.manualMappings = manualMappings.map(({ token, value, sourceValue }) => ({ token, value, sourceValue }))
+  if (excludedValues.length) body.excludedValues = excludedValues
   if (file?.s3Key) {
     body.fileName = file.fileName
     body.s3Key = file.s3Key
@@ -69,7 +72,11 @@ export async function encodeText(
   } else {
     body.text = text
   }
-  return post<EncodeResult>('/encode', body)
+  const result = await post<EncodeResult>('/encode', body)
+  if (excludedValues.some(value => !result.excludedValues?.includes(value))) {
+    throw new Error('This API version does not support keeping values unredacted yet.')
+  }
+  return result
 }
 
 export async function extractFile(

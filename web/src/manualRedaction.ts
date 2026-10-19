@@ -2,6 +2,17 @@ import type { Mapping } from './api'
 
 const TOKEN = /(\[[A-Za-z][A-Za-z0-9_:]*_\d+\])/g
 
+/** Keep restored multiword values together so one click can redact them again. */
+export function redactableTextParts(text: string, excludedValues: string[] = []): string[] {
+  const literals = [...new Set(excludedValues)].filter(value => value.length >= 2).sort((a, b) => b.length - a.length)
+  const alternatives = literals.map(value => {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return `(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`
+  })
+  alternatives.push("[\\p{L}\\p{N}][\\p{L}\\p{N}'’@_+-]*(?:\\.[\\p{L}\\p{N}'’@_+-]+)*")
+  return text.split(new RegExp(`(${alternatives.join('|')})`, 'gu'))
+}
+
 export function nextManualToken(category: string, mappings: Mapping[], nextIdx: Record<string, number>): string {
   let index = Math.max(1, nextIdx[category] ?? 1)
   for (const mapping of mappings) {

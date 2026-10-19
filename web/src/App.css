@@ -182,3 +182,9 @@ td input { width: 100%; }
 .word-redact { display: inline; border: 0; padding: 0; margin: 0; background: transparent; color: inherit; font: inherit; border-radius: 3px; text-align: inherit; }
 .word-redact:hover:not(:disabled) { background: var(--hover); text-decoration: underline; }
 .word-redact:disabled { opacity: 1; }
+.token-restore { display: inline; padding: 1px 4px; border: 0; border-radius: 4px; background: #848ca320; font: inherit; }
+.token-restore:hover:not(:disabled) { outline: 1px solid currentColor; outline-offset: 1px; }
+.token-restore:disabled { opacity: 1; }
+.token-restore.token-name { background: #337cf52b; }
+.token-restore.token-email { background: #12b79724; }
+.token-restore.token-phone { background: #15b8c324; }
