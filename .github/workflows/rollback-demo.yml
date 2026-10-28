@@ -46,6 +46,10 @@ jobs:
           github-token: ${{ github.token }}
       - name: Restore original Testing setup from the initial attempt
         run: |
+          aws lambda get-function-configuration --function-name poco-pii-api-handler-test \
+            --query '{revision:RevisionId,hash:CodeSha256,description:Description,status:LastUpdateStatus}'
+          aws lambda get-alias --function-name poco-pii-api-handler-test --name live \
+            --query '{revision:RevisionId,version:FunctionVersion,description:Description}'
           python3 scripts/lambda_release.py recover --stage test --state previous-demo/test.json
           python3 scripts/lambda_release.py demo-cleanup --stage test --state previous-demo/test.json
       - name: Activate an unchanged Testing application, inject failure and recover
