@@ -4,6 +4,10 @@ use std::collections::{HashMap, HashSet};
 use poco_core::vault::{EncodedOutput, TokenMapping};
 use serde::Deserialize;
 
+#[cfg(test)]
+#[path = "manual_tests.rs"]
+mod tests;
+
 #[derive(Debug, Deserialize)]
 pub struct ManualMapping {
     token: String,

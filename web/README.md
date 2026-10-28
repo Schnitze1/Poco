@@ -13,11 +13,20 @@ npm run dev
 
 ```sh
 npm run test:ci
+npm run test:coverage
 npm run lint
 npm run build
 ```
 
-`npm run test:ci` runs the colocated Vitest tests once using jsdom. It uses the plain-text TAP reporter: each test has an `ok` or `not ok` result without decorative status symbols. GitHub Actions captures this output under **Frontend checks → Run frontend tests**; there is currently no separate HTML report or coverage report. `npm test` starts watch mode. The persistence tests cover empty storage, workspace restoration, clearing an old session, and malformed stored JSON.
+`npm run test:ci` runs the colocated Vitest tests once using jsdom. It uses the plain-text TAP reporter: each test has an `ok` or `not ok` result without decorative status symbols. `npm test` starts watch mode. The persistence tests cover empty storage, workspace restoration, clearing an old session, and malformed stored JSON.
+
+`npm run test:coverage` runs the same tests once with the matching Vitest V8 coverage provider. It produces a console table, an HTML report at `coverage/index.html`, `coverage/coverage-summary.json` and `coverage/lcov.info`. The HTML report describes covered source lines; it is not a browser acceptance or test-case report.
+
+Coverage includes every `src/**/*.ts` and `src/**/*.tsx` file, including files that no test imports. Test files and TypeScript declarations are excluded. React components, API code, browser PDF extraction and the application entry point remain in scope, so utility tests alone do not imply that the whole frontend is covered.
+
+GitHub Actions uses this coverage command instead of running the same tests twice. See **Frontend checks → Run frontend tests with coverage**, the job summary and the `frontend-coverage` artifact. Reports are retained for 30 days and are also uploaded when tests fail if report files were produced. Test failures or global line coverage below 80% fail CI and block delivery. `npm run test:ci` remains available for running the tests without instrumentation.
+
+The suite includes React user journeys for Encode/Vault/Decode, click-to-toggle, workspace management, file import, error recovery and busy states. Component checks cover document renaming and Vault editing, while API and PDF tests verify request/error and extraction behaviour. Network and PDF-parser boundaries are mocked in these code-level checks; live Testing/Staging browser acceptance remains separate.
 
 The shared `.github/workflows/ci.yml` runs locked Rust tests plus frontend tests, lint and build on implementation-branch pushes and pull requests. These checks use in-memory backend storage and do not prove live AWS behaviour.
 
