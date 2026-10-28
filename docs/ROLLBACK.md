@@ -42,6 +42,8 @@ Initial live checks caught stale revision identifiers after alias permission set
 
 The first integrated delivery exposed another issue: the monitoring readiness check scanned all JSON files in the evidence folder, including the newly added alias/configuration records that have no metric samples. The corrected gate uses `scripts/check_monitoring.py` to require samples in exactly the six expected metric responses. Regression tests verify that unrelated evidence does not block valid metrics and that missing, empty or invalid required responses still block readiness.
 
+Subsequent packaging attempts spent unusually long in AWS SDK release compilation without reporting a compiler error. Comparison with the successful package confirmed identical application source, Rust and SDK versions; the precise cause was not established. The build now limits concurrent crates to two and prints CPU/RAM/process snapshots every 30 seconds. The build wrapper preserves compiler failures rather than allowing progress logging to hide them. Record actual run durations instead of treating one earlier build time as a guaranteed pipeline duration.
+
 ## Limits and manual recovery
 
 Recovery applies to the failing backend environment. A failure in Staging does not revert an already accepted Development or Testing deployment. Monitoring sample/dashboard failures after a healthy Production deployment do not revert that application. The website is published separately through GitHub Pages; automatic frontend rollback is not implemented. DynamoDB/S3 writes, schema changes and external side effects are not reversed by switching Lambda versions.
