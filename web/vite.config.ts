@@ -9,5 +9,15 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
+    coverage: {
+      provider: 'v8',
+      // Include unimported application files so the baseline reflects the whole app.
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.test.{ts,tsx}', 'src/**/*.d.ts'],
+      reporter: ['text', 'html', 'json-summary', 'lcov'],
+      reportsDirectory: 'coverage',
+      reportOnFailure: true,
+      thresholds: { lines: 80 },
+    },
   },
 })

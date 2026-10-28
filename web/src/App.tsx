@@ -110,14 +110,21 @@ const CLASS_OPTIONS = ['Name', 'Email', 'Phone', 'Location', 'Date', 'Passport',
 
 function guessClass(word: string): string {
   if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(word)) return 'Email'
+  const digits = word.replace(/[\s-]/g, '')
+  if (/^[1-9]\d{12,18}$/.test(digits)) {
+    const checksum = [...digits].reverse().reduce((sum, digit, index) => {
+      const value = Number(digit) * (index % 2 ? 2 : 1)
+      return sum + (value > 9 ? value - 9 : value)
+    }, 0)
+    if (checksum % 10 === 0) return 'CreditCard'
+  }
   if (/^[+()\d][\d\s()-]{6,}$/.test(word)) return 'Phone'
-  if (/^\d{4}[-\s]?\d{4}/.test(word.replace(/\s/g, ''))) return 'CreditCard'
   if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+$/.test(word)) return 'Name'
   return 'Custom'
 }
 
 function App() {
-  const restored = useRef(loadWorkspace()).current
+  const [restored] = useState(loadWorkspace)
   const [page, setPage] = useState<Page>('Encode')
   const [light, setLight] = useState(false)
   /** 1. One shared documents array — single source of truth. */

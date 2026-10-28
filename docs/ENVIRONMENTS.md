@@ -102,6 +102,16 @@ The preview runs a production frontend build connected directly to the real stag
 
 ## Assignment coverage and remaining evidence
 
+### Code coverage reports
+
+Shared CI runs frontend tests with Vitest V8 coverage and backend tests with cargo-llvm-cov. Both jobs write coverage tables to the Actions summary and upload HTML and machine-readable reports as `frontend-coverage` and `backend-coverage`. These artifacts are retained for 30 days; download them for the report before they expire. This retention setting applies to coverage artifacts, not the existing seven-day browser, monitoring or Lambda artifacts.
+
+Frontend scope includes all application TypeScript/TSX files under `web/src`, even if unimported by tests; test files and declarations are excluded. Backend scope is the Rust workspace with the tool's default dependency/generated/standalone-test exclusions. Inline Rust unit-test modules remain included, which must be stated when interpreting that percentage. The coverage jobs use code-level tests with in-memory backend storage and need no active Learner Lab.
+
+Both jobs enforce a global minimum of 80% line coverage. Frontend coverage is checked by Vitest, while Rust coverage uses `cargo llvm-cov report --fail-under-lines 80`. Test, coverage and reporting failures block delivery, with generated artifacts retained for diagnosis. A local report is evidence of a local execution; use a successful Actions run as evidence that the CI configuration executed. Report frontend and backend percentages separately, with their scopes, rather than combining them or confusing passing-test counts with coverage.
+
+The measured local baseline, scope limitations and suggested report wording are recorded in [COVERAGE.md](COVERAGE.md).
+
 | Specification | Pipeline support | Evidence needed |
 |---|---|---|
 | Level 1: four environments | Separate Lambda/API stages and storage, validated before delivery | AWS configuration and isolation screenshots |
