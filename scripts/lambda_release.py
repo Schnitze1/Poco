@@ -243,7 +243,13 @@ class Release:
             existing = self.aws.call("lambda", "create-alias", function_name=self.function,
                                      name=ALIAS, function_version=previous, description="Poco live baseline")
         self.permission(baseline)
-        self.event("Alias invocation permission verified", previous_alias_revision=existing["RevisionId"])
+        # Permission/bootstrap operations may advance the alias revision. Retain a
+        # fresh revision after setup, while rejecting a changed version/description.
+        refreshed = self.alias()
+        if (refreshed["FunctionVersion"] != previous or
+                refreshed.get("Description") != existing.get("Description")):
+            raise ReleaseError("Alias changed during routing setup")
+        self.event("Alias invocation permission verified", previous_alias_revision=refreshed["RevisionId"])
         if original_route == self.function:
             # Record intent first; recovery also handles an applied update whose response was lost.
             self.event("Migrating only this stage to live", route_migration_intent=True)
@@ -291,8 +297,11 @@ class Release:
         config = self.config()
         self.validate_config(config)
         if demo:
+            if fingerprint(config) != self.state["previous_fingerprint"]:
+                raise ReleaseError("Demonstration requires $LATEST to match the healthy serving baseline")
             self.event("Saving Testing metadata for demonstration cleanup",
-                       demo_description=config.get("Description", ""), demo_hash=config["CodeSha256"])
+                       demo_description=config.get("Description", ""), demo_hash=config["CodeSha256"],
+                       demo_original_fingerprint=fingerprint(config))
         marker = f'Poco release {os.environ.get("GITHUB_SHA", "local")[:12]} {self.state["owner"]}'
         # Configure instrumentation before creating the immutable Production version.
         params = {"description": marker}
@@ -385,18 +394,27 @@ class Release:
         self.event("Previous version, configuration, routing and health verified", recovered=True)
 
     def demo_cleanup(self):
+        if self.stage != "test":
+            raise ReleaseError("Demonstration cleanup is restricted to Testing")
         if not self.state.get("recovered"):
             raise ReleaseError("Cannot clean up the demonstration before recovery is verified")
-        if self.state["original_route"] == self.function:
-            self.set_route(f"{self.function}:{ALIAS}", self.function)
         config = self.config()
-        if (config["CodeSha256"] != self.state["demo_hash"] or
-                config.get("Description") != self.state["candidate_description"] or
-                config["RevisionId"] != self.state["candidate_latest_revision"]):
-            raise ReleaseError("Testing $LATEST changed externally; refusing metadata cleanup")
-        self.aws.call("lambda", "update-function-configuration", function_name=self.function,
-                      revision_id=config["RevisionId"], description=self.state["demo_description"])
-        self.wait()
+        original = self.state.get("demo_original_fingerprint", self.state["previous_fingerprint"])
+        if fingerprint(config) != original:
+            if (config["CodeSha256"] != self.state["demo_hash"] or
+                    config.get("Description") != self.state["candidate_description"] or
+                    config["RevisionId"] != self.state.get("candidate_latest_revision", config["RevisionId"])):
+                raise ReleaseError("Testing $LATEST changed externally; refusing metadata cleanup")
+            self.aws.call("lambda", "update-function-configuration", function_name=self.function,
+                          revision_id=config["RevisionId"], description=self.state["demo_description"])
+            self.wait()
+            if fingerprint(self.config()) != original:
+                raise ReleaseError("Original Testing configuration was not restored")
+        route = self.route()
+        if self.state["original_route"] == self.function and route != self.function:
+            self.set_route(f"{self.function}:{ALIAS}", self.function)
+        elif route != self.state["original_route"]:
+            raise ReleaseError("Testing routing changed externally; refusing cleanup")
         self.health(self.stage)
         self.event("Testing original routing and metadata restored", demo_cleanup=True)
 
@@ -412,13 +430,14 @@ class Release:
             print("Expected verification failure detected; starting automatic recovery", flush=True)
         finally:
             self.recover()
-        self.demo_cleanup()
+            if self.state.get("recovered") and "demo_description" in self.state:
+                self.demo_cleanup()
         self.event("Controlled Testing rollback demonstration passed", demo_passed=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["audit", "prepare", "deploy", "complete", "recover", "demo"])
+    parser.add_argument("action", choices=["audit", "prepare", "deploy", "complete", "recover", "demo", "demo-cleanup"])
     parser.add_argument("--stage", choices=list(FUNCTIONS), required=True)
     parser.add_argument("--state", required=True, help="Safe release-state JSON path")
     parser.add_argument("--zip")
@@ -433,6 +452,8 @@ def main():
             release.deploy(args.zip)
         elif args.action == "demo":
             release.demonstrate()
+        elif args.action == "demo-cleanup":
+            release.demo_cleanup()
         else:
             getattr(release, args.action)()
     except (ReleaseError, OSError, ValueError, KeyError) as error:

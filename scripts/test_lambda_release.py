@@ -100,6 +100,7 @@ class FakeAws:
                 "Resource": self.latest["FunctionArn"] + ":live",
                 "Condition": {"ArnLike": {"AWS:SourceArn": params["source_arn"]},
                               "StringEquals": {"AWS:SourceAccount": params["source_account"]}}}]}
+            self.live["RevisionId"] = self.bump()
             return {}
         if operation == "get-policy":
             return {"Policy": json.dumps(self.policy)}
@@ -305,6 +306,22 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseError, "restricted to Testing"):
             release.demonstrate()
         self.assertEqual(aws.calls, [])
+
+    def test_demo_failure_before_activation_also_restores_original_metadata(self):
+        original = fingerprint(self.aws.latest)
+        self.release.invoke = lambda version: (_ for _ in ()).throw(ReleaseError("invoke failed"))
+        with self.assertRaisesRegex(ReleaseError, "invoke failed"):
+            self.release.demonstrate()
+        self.assertEqual(self.aws.target, self.aws.function)
+        self.assertEqual(fingerprint(self.aws.latest), original)
+        self.assertTrue(self.release.state["demo_cleanup"])
+        self.assertNotIn("demo_passed", self.release.state)
+
+    def test_alias_revision_is_refreshed_after_permission_setup(self):
+        self.release.prepare()
+        self.assertEqual(self.release.state["previous_alias_revision"], self.aws.live["RevisionId"])
+        self.release.deploy(self.package())
+        self.assertTrue(self.release.state["candidate_verified"])
 
     def test_state_from_another_environment_is_rejected(self):
         self.release.prepare()
