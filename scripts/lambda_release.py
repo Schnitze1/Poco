@@ -316,7 +316,8 @@ class Release:
                       revision_id=config["RevisionId"], **params)
         self.wait()
         config = self.config()
-        self.event("Candidate configuration prepared", candidate_latest_revision=config["RevisionId"])
+        self.event("Candidate configuration prepared", candidate_latest_revision=config["RevisionId"],
+                   candidate_workspace_fingerprint=fingerprint(config))
         expected_hash = config["CodeSha256"]
         if zip_path is not None:
             package = Path(zip_path).resolve()
@@ -329,8 +330,12 @@ class Release:
         if config["CodeSha256"] != expected_hash or config.get("Description") != marker:
             raise ReleaseError("Candidate package/configuration verification failed")
         candidate = self.publish(config)
+        latest = self.config()
+        if fingerprint(latest) != fingerprint(config):
+            raise ReleaseError("Candidate workspace changed during version publication")
         self.event("Candidate snapshot published", candidate_version=candidate,
-                   candidate_hash=expected_hash, candidate_fingerprint=fingerprint(config))
+                   candidate_hash=expected_hash, candidate_fingerprint=fingerprint(config),
+                   candidate_latest_revision=latest["RevisionId"])
         self.invoke(candidate)
         self.event("Candidate runtime health verified; activating live", activation_intent=True)
         alias = self.aws.call("lambda", "update-alias", function_name=self.function, name=ALIAS,
@@ -363,6 +368,7 @@ class Release:
         if not self.state:
             print(f"{self.stage}: no release state; no traffic was changed")
             return
+        self.event("Checking failed release recovery state", recovered=False)
         if not self.state.get("prepared"):
             if self.state.get("route_migration_intent"):
                 route = self.route()
@@ -401,9 +407,14 @@ class Release:
         config = self.config()
         original = self.state.get("demo_original_fingerprint", self.state["previous_fingerprint"])
         if fingerprint(config) != original:
+            # Publishing a version can advance $LATEST's revision without changing
+            # its configuration. Verify the full owned snapshot, then CAS the
+            # current revision instead of reusing a pre-publication revision.
+            candidate_fingerprint = self.state.get("candidate_fingerprint",
+                                                   self.state.get("candidate_workspace_fingerprint"))
             if (config["CodeSha256"] != self.state["demo_hash"] or
                     config.get("Description") != self.state["candidate_description"] or
-                    config["RevisionId"] != self.state.get("candidate_latest_revision", config["RevisionId"])):
+                    fingerprint(config) != candidate_fingerprint):
                 raise ReleaseError("Testing $LATEST changed externally; refusing metadata cleanup")
             self.aws.call("lambda", "update-function-configuration", function_name=self.function,
                           revision_id=config["RevisionId"], description=self.state["demo_description"])

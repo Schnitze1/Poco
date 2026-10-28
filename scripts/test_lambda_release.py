@@ -74,6 +74,7 @@ class FakeAws:
             assert params["code_sha256"] == self.latest["CodeSha256"]
             number = str(len(self.versions) + 1)
             self.versions[number] = {**copy.deepcopy(self.latest), "Version": number}
+            self.latest["RevisionId"] = self.bump()
             return copy.deepcopy(self.versions[number])
         if operation == "get-alias":
             if self.live is None:
