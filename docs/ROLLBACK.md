@@ -36,6 +36,10 @@ The demonstration snapshots the healthy Testing application, changes only Lambda
 
 A green demonstration means the injected failure and recovery/cleanup were verified. It is not evidence that corrupt application code was deployed or that every failure type was tested. A real failed deployment remains red even if its recovery step succeeds. Record the actual run result before claiming live rollback in the report.
 
+Live Testing verification succeeded on 28 October 2026: [successful recovery demonstration](https://github.com/Schnitze1/Poco/actions/runs/40626518227). The artifact records candidate activation, the injected verification failure, restoration of the previous version, verified API health and restoration of the original Testing routing/metadata. This proves that the current lab credentials allowed the required Testing operations. Production integration still needs its first deployment after merging this change.
+
+Initial live checks caught stale revision identifiers after alias permission setup and version publication. The helper now refreshes the alias revision after setup, verifies the candidate workspace after publication and checks the complete owned configuration fingerprint before metadata cleanup. These checks allowed recovery without overwriting unrelated configuration. The earlier attempts kept the previous application healthy; the successful run also verified cleanup.
+
 ## Limits and manual recovery
 
 Recovery applies to the failing backend environment. A failure in Staging does not revert an already accepted Development or Testing deployment. Monitoring sample/dashboard failures after a healthy Production deployment do not revert that application. The website is published separately through GitHub Pages; automatic frontend rollback is not implemented. DynamoDB/S3 writes, schema changes and external side effects are not reversed by switching Lambda versions.

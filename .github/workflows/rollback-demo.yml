@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 # Wait behind the current delivery; never cancel or change its release.
 concurrency:
@@ -36,22 +35,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
-      # One-time guarded cleanup of the initial failed verification attempt.
-      # Removed once its original Testing metadata/routing are restored.
-      - uses: actions/download-artifact@v4
-        with:
-          name: testing-rollback-demonstration
-          path: previous-demo
-          run-id: 40625882060
-          github-token: ${{ github.token }}
-      - name: Restore original Testing setup from the initial attempt
-        run: |
-          aws lambda get-function-configuration --function-name poco-pii-api-handler-test \
-            --query '{revision:RevisionId,hash:CodeSha256,description:Description,status:LastUpdateStatus}'
-          aws lambda get-alias --function-name poco-pii-api-handler-test --name live \
-            --query '{revision:RevisionId,version:FunctionVersion,description:Description}'
-          python3 scripts/lambda_release.py recover --stage test --state previous-demo/test.json
-          python3 scripts/lambda_release.py demo-cleanup --stage test --state previous-demo/test.json
       - name: Activate an unchanged Testing application, inject failure and recover
         id: demo
         run: python3 scripts/lambda_release.py demo --stage test --state "$RELEASE_STATE"
