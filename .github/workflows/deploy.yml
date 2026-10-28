@@ -158,6 +158,7 @@ jobs:
       INSIGHTS_LAYER: arn:aws:lambda:us-east-1:580247275435:layer:LambdaInsightsExtension:66
       EVIDENCE_DIR: ${{ github.workspace }}/production-monitoring-evidence
     steps:
+      - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -213,7 +214,7 @@ jobs:
               --dimensions "Name=ApiName,Value=$API_NAME" Name=Stage,Value=prod \
               --start-time "$START_TIME" --end-time "$END_TIME" --period 60 --statistics Average \
               --output json > "$EVIDENCE_DIR/http-latency.json"
-            if jq -s -e 'all(.Datapoints | length > 0)' "$EVIDENCE_DIR"/*.json >/dev/null; then
+            if python3 scripts/check_monitoring.py "$EVIDENCE_DIR"; then
               echo 'Production CPU, memory, temporary-disk, network and HTTP latency samples verified.' >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
