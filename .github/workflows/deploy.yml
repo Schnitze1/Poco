@@ -164,63 +164,31 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
-      - name: Enable Lambda Insights and verify production health
+      - name: Verify monitoring on the immutable live Production version
         run: |
           set -euo pipefail
-          WORK_DIR=$(mktemp -d)
           mkdir -p "$EVIDENCE_DIR"
-          URL='https://6xz841x652.execute-api.us-east-1.amazonaws.com/prod/health'
-          curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$URL" \
-            > "$WORK_DIR/health.json"
-          jq -e '.status == "ok" and .env == "prod"' "$WORK_DIR/health.json" >/dev/null
-          aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" \
-            --query '{revision:RevisionId,hash:CodeSha256,layers:Layers[].Arn,runtime:Runtime,arch:Architectures}' \
-            --output json > "$WORK_DIR/original.json"
-          jq -e '.runtime == "provided.al2023" and .arch == ["x86_64"]' "$WORK_DIR/original.json" >/dev/null
-          jq --arg name "$TARGET_LAMBDA" --arg layer "$INSIGHTS_LAYER" '{
-            FunctionName: $name, RevisionId: .revision,
-            Layers: ((.layers // [] | map(select(contains(":layer:LambdaInsightsExtension:") | not))) + [$layer])
-          }' "$WORK_DIR/original.json" > "$WORK_DIR/update.json"
-          jq -e '.Layers | length <= 5' "$WORK_DIR/update.json" >/dev/null
-          UPDATED=false
-          APPLIED_REVISION=''
-          restore_on_failure() {
-            result=$?
-            trap - EXIT
-            if [[ "$result" != 0 && "$UPDATED" == true ]]; then
-              echo 'Monitoring health validation failed; restoring the previous layer configuration.' >&2
-              jq --arg name "$TARGET_LAMBDA" --arg revision "$APPLIED_REVISION" \
-                '{FunctionName: $name, RevisionId: $revision, Layers: (.layers // [])}' \
-                "$WORK_DIR/original.json" > "$WORK_DIR/restore.json"
-              if ! aws lambda update-function-configuration --cli-input-json "file://$WORK_DIR/restore.json" \
-                --query LastUpdateStatus --output text; then
-                echo 'ERROR: Layer restoration failed; inspect the production Lambda configuration.' >&2
-              else
-                aws lambda wait function-updated --function-name "$TARGET_LAMBDA"
-              fi
-            fi
-            exit "$result"
-          }
-          trap restore_on_failure EXIT
-          if ! jq -e --arg layer "$INSIGHTS_LAYER" '(.layers // []) | index($layer) != null' \
-            "$WORK_DIR/original.json" >/dev/null; then
-            APPLIED_REVISION=$(aws lambda update-function-configuration \
-              --cli-input-json "file://$WORK_DIR/update.json" --query RevisionId --output text)
-            UPDATED=true
-            aws lambda wait function-updated --function-name "$TARGET_LAMBDA"
-          fi
-          # Health requests also generate fresh monitoring samples without creating sessions.
+          aws lambda get-alias --function-name "$TARGET_LAMBDA" --name live --output json \
+            > "$EVIDENCE_DIR/live-alias.json"
+          jq -e '(.FunctionVersion | test("^[0-9]+$")) and
+            ((.RoutingConfig.AdditionalVersionWeights // {}) | length == 0)' \
+            "$EVIDENCE_DIR/live-alias.json" >/dev/null
+          VERSION=$(jq -r .FunctionVersion "$EVIDENCE_DIR/live-alias.json")
+          aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" --qualifier "$VERSION" \
+            --query '{version:Version,hash:CodeSha256,layers:Layers[].Arn,runtime:Runtime,arch:Architectures}' \
+            --output json > "$EVIDENCE_DIR/live-config.json"
+          jq -e --arg layer "$INSIGHTS_LAYER" '.runtime == "provided.al2023" and .arch == ["x86_64"] and
+            ((.layers // []) | index($layer) != null)' "$EVIDENCE_DIR/live-config.json" >/dev/null
+          # Instrumentation is included before version publication, inside the rollback boundary.
+          # This job observes the accepted version and never changes its configuration.
           for attempt in 1 2 3 4 5 6; do
-            curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$URL" \
-              > "$WORK_DIR/health.json"
-            jq -e '.status == "ok" and .env == "prod"' "$WORK_DIR/health.json" >/dev/null
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+              'https://6xz841x652.execute-api.us-east-1.amazonaws.com/prod/health' \
+              | jq -e '.status == "ok" and .env == "prod"' >/dev/null
             echo "Production health request $attempt passed."
             sleep 1
           done
-          AFTER_HASH=$(aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" \
-            --query CodeSha256 --output text)
-          [[ "$AFTER_HASH" == "$(jq -r .hash "$WORK_DIR/original.json")" ]]
-          echo 'Production Insights layer and health validated; application code hash preserved.' >> "$GITHUB_STEP_SUMMARY"
+          echo "Production live version $VERSION includes Lambda Insights and passes health verification." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Wait for CPU, memory, disk and network metrics
         run: |

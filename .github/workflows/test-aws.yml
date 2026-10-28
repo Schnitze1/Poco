@@ -39,7 +39,21 @@ jobs:
           for stage in dev test staging prod; do
             lambda="poco-pii-api-handler-$stage"
             if [[ "$stage" == prod ]]; then lambda='poco-pii-api-handler'; fi
+            ROUTED_LAMBDA=$(aws apigateway get-stage --rest-api-id 6xz841x652 \
+              --stage-name "$stage" --query variables.lambdaName --output text)
+            QUALIFIER=()
+            if [[ "$ROUTED_LAMBDA" == "$lambda:live" ]]; then
+              aws lambda get-alias --function-name "$lambda" --name live --output json \
+                | jq -e '.FunctionVersion | test("^[0-9]+$")' >/dev/null
+              aws lambda get-alias --function-name "$lambda" --name live --output json \
+                | jq -e '(.RoutingConfig.AdditionalVersionWeights // {}) | length == 0' >/dev/null
+              QUALIFIER=(--qualifier live)
+            elif [[ "$ROUTED_LAMBDA" != "$lambda" ]]; then
+              echo "ERROR: API stage $stage must target $lambda or $lambda:live (currently $ROUTED_LAMBDA)" >&2
+              exit 1
+            fi
             aws lambda get-function-configuration --function-name "$lambda" \
+              "${QUALIFIER[@]}" \
               --query '{lambda:FunctionName,runtime:Runtime,handler:Handler,arch:Architectures,state:State,role:Role,stage:Environment.Variables.ENVIRONMENT,table:Environment.Variables.DYNAMODB_TABLE,bucket:Environment.Variables.S3_BUCKET}' \
               --output json > "$CONFIG_DIR/$stage.json"
             jq -r --arg stage "$stage" \
@@ -53,12 +67,6 @@ jobs:
               (.bucket | type == "string" and length > 0)
             ' "$CONFIG_DIR/$stage.json" >/dev/null; then
               echo "ERROR: Invalid Lambda runtime, role, environment or storage configuration for $stage" >&2
-              exit 1
-            fi
-            ROUTED_LAMBDA=$(aws apigateway get-stage --rest-api-id 6xz841x652 \
-              --stage-name "$stage" --query variables.lambdaName --output text)
-            if [[ "$ROUTED_LAMBDA" != "$lambda" ]]; then
-              echo "ERROR: API stage $stage must target $lambda (currently $ROUTED_LAMBDA)" >&2
               exit 1
             fi
           done
