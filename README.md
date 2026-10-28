@@ -18,6 +18,8 @@ Detect PII in text (and PDF/DOCX uploads), replace it with readable tokens such 
 | `pii-tool/test_data/` | PDF/DOCX/TXT fixtures for the gold suite |
 | `docs/API.md` | HTTP API contract for the website client |
 | `docs/ENVIRONMENTS.md` | Environment setup, automatic delivery and demo checklist |
+| `docs/ROLLBACK.md` | Automatic backend recovery, AWS setup, limits and report evidence |
+| `scripts/` | Versioned Lambda deployment/recovery helper and offline regression tests |
 | `.github/workflows/deploy.yml` | Automatic delivery from main through all environments |
 | `.github/workflows/ci.yml` | Shared backend tests and frontend tests/lint/build |
 | `.github/workflows/deploy-environment.yml` | Shared Lambda deployment, health and Testing/Staging acceptance checks |
@@ -79,7 +81,7 @@ feature/* → PR → main (trunk)
          Verify the website and release metadata
 ```
 
-Every environment must pass package/configuration and API health checks before the next deployment starts. Testing and Staging also run live encode/decode, DynamoDB/S3 integration and Chromium browser acceptance before promotion. The same Lambda ZIP is reused throughout. Failed checks stop promotion; failure after publication reports a failed release and does not automatically roll back.
+Every environment must pass package/configuration and API health checks before the next deployment starts. Testing and Staging also run live encode/decode, DynamoDB/S3 integration and Chromium browser acceptance before promotion. The same Lambda ZIP is reused throughout. Each environment retains its previous numbered Lambda version behind a `live` alias. A deployment/verification failure inside that environment's job attempts to restore and verify the previous version, leaves the release failed and stops promotion. Later monitoring-data/dashboard or website publication failures do not revert a healthy backend. Frontend and data recovery are separate; see [automatic backend recovery](docs/ROLLBACK.md).
 
 `main` is the single trunk and deployment source. Work in small changes on short-lived branches, review the PR and merge frequently into `main`. Environments are deployment targets, so no additional branch merges are needed for promotion. This follows [DORA's trunk-based development guidance](https://dora.dev/capabilities/trunk-based-development/).
 
@@ -91,7 +93,7 @@ AWS Academy Learner Lab uses `us-east-1`, the existing `LabRole`, and temporary 
 
 Live API/storage integration and browser acceptance run in Testing and Staging. Browser tests exercise Encode → Vault → refresh → Decode and the unknown-token warning, with screenshots and traces retained as evidence.
 
-Production monitoring uses Lambda Insights and the `Poco-Production` CloudWatch dashboard. A dedicated monitoring job configures and verifies it after Production deployment and before website publication.
+Production monitoring uses Lambda Insights and the `Poco-Production` CloudWatch dashboard. Production deployment includes the layer before publishing its candidate version. A dedicated monitoring job verifies the accepted version and updates the dashboard before website publication.
 
 Setup and monitoring requirements: [`docs/ENVIRONMENTS.md`](docs/ENVIRONMENTS.md).
 

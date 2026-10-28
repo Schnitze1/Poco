@@ -1,0 +1,67 @@
+name: Testing rollback demonstration
+
+on:
+  workflow_dispatch:
+  # Allows proving the new workflow before it exists on the default branch.
+  push:
+    branches: [feat/automatic-backend-rollback]
+    paths:
+      - scripts/lambda_release.py
+      - scripts/test_lambda_release.py
+      - .github/workflows/rollback-demo.yml
+
+permissions:
+  contents: read
+
+# Wait behind the current delivery; never cancel or change its release.
+concurrency:
+  group: poco-delivery
+  cancel-in-progress: false
+
+jobs:
+  demonstrate:
+    name: Prove recovery in Testing only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RELEASE_STATE: ${{ github.workspace }}/rollback-evidence/test.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify recovery logic offline
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - name: Activate an unchanged Testing application, inject failure and recover
+        id: demo
+        run: python3 scripts/lambda_release.py demo --stage test --state "$RELEASE_STATE"
+      - name: Retry recovery if the demonstration failed
+        if: ${{ failure() && steps.demo.outcome == 'failure' }}
+        run: python3 scripts/lambda_release.py recover --stage test --state "$RELEASE_STATE"
+      - name: Summarise the verified demonstration
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          state = json.loads(Path(os.environ['RELEASE_STATE']).read_text())
+          assert state['demo_passed'] and state['recovered'] and state['demo_cleanup']
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Testing rollback demonstrated\n\n'
+                  f"Baseline version: {state['previous_version']}. Candidate version: {state['candidate_version']}.\n\n"
+                  'An unchanged application was published as a distinct version. A deliberate verification '
+                  'failure triggered recovery. The previous version, configuration, API routing and health '
+                  'were verified. Original Testing routing and metadata were restored.\n\n'
+                  'Production was not changed. This proves alias recovery; it does not simulate corrupt '
+                  'application code, data recovery, runner loss or expired credentials.\n')
+          PY
+      - name: Save recovery evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: testing-rollback-demonstration
+          path: rollback-evidence/
+          retention-days: 30

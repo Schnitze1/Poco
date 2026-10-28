@@ -24,6 +24,14 @@ permissions:
   contents: read
 
 jobs:
+  release-tests:
+    name: Release recovery tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test deployment and rollback safety offline
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
   backend-tests:
     name: Backend tests
     runs-on: ubuntu-24.04

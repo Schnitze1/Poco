@@ -23,6 +23,11 @@ pii-tool/output/
 !.env.example
 *.log
 
+# Local deployment verification outputs
+__pycache__/
+/release-evidence/
+/rollback-evidence/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

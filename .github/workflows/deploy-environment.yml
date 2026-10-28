@@ -20,7 +20,7 @@ jobs:
   deploy-and-verify:
     name: Deploy and verify
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     environment:
       name: ${{ inputs.environment }}
       url: https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ inputs.stage }}/health
@@ -28,9 +28,9 @@ jobs:
       TARGET_LAMBDA: ${{ inputs.lambda }}
       API_STAGE: ${{ inputs.stage }}
       API_BASE: https://6xz841x652.execute-api.us-east-1.amazonaws.com/${{ inputs.stage }}
+      RELEASE_STATE: ${{ github.workspace }}/release-evidence/${{ inputs.stage }}.json
     steps:
       - uses: actions/checkout@v4
-        if: ${{ inputs.stage == 'test' || inputs.stage == 'staging' }}
       - uses: actions/download-artifact@v4
         with:
           name: lambda-bootstrap
@@ -42,23 +42,15 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
-      - name: Deploy the shared Lambda package and verify configuration
+      - name: Retain the working version and configure live routing
+        id: release_prepare
         run: |
-          set -euo pipefail
-          ZIP='artifact/bootstrap.zip'
-          test -f "$ZIP"
-          EXPECTED_HASH=$(openssl dgst -sha256 -binary "$ZIP" | openssl base64 -A)
-          aws lambda update-function-code --function-name "$TARGET_LAMBDA" \
-            --zip-file "fileb://$ZIP" --query '{CodeSha256:CodeSha256,LastUpdateStatus:LastUpdateStatus}'
-          aws lambda wait function-updated --function-name "$TARGET_LAMBDA"
-          CONFIG=$(aws lambda get-function-configuration --function-name "$TARGET_LAMBDA" \
-            --query '{hash:CodeSha256,status:LastUpdateStatus,stage:Environment.Variables.ENVIRONMENT,table:Environment.Variables.DYNAMODB_TABLE,bucket:Environment.Variables.S3_BUCKET}' \
-            --output json)
-          jq -e --arg hash "$EXPECTED_HASH" --arg stage "$API_STAGE" '
-            .hash == $hash and .status == "Successful" and .stage == $stage and
-            (.table | type == "string" and length > 0) and
-            (.bucket | type == "string" and length > 0)
-          ' <<< "$CONFIG" >/dev/null
+          python3 scripts/lambda_release.py prepare --stage "$API_STAGE" --state "$RELEASE_STATE"
+
+      - name: Publish the shared package and activate its verified version
+        run: |
+          python3 scripts/lambda_release.py deploy --stage "$API_STAGE" --state "$RELEASE_STATE" \
+            --zip artifact/bootstrap.zip
 
       - name: Wait for API health and verify environment identity
         run: |
@@ -104,7 +96,7 @@ jobs:
           SESSION_ID=$(cat /proc/sys/kernel/random/uuid)
           VALUES=$(jq -nc --arg sid "$SESSION_ID" '{":sid": {S: $sid}}')
           CONFIG=$(aws lambda get-function-configuration \
-            --function-name "poco-pii-api-handler-$API_STAGE" \
+            --function-name "$TARGET_LAMBDA" --qualifier live \
             --query 'Environment.Variables.{stage:ENVIRONMENT,table:DYNAMODB_TABLE,bucket:S3_BUCKET}' --output json)
           jq -e --arg stage "$API_STAGE" '.stage == $stage and
             (.table | type == "string" and length > 0) and
@@ -310,6 +302,15 @@ jobs:
             }
           }
           NODE
+      - name: Confirm the accepted version still owns live traffic
+        run: python3 scripts/lambda_release.py complete --stage "$API_STAGE" --state "$RELEASE_STATE"
+
+      # A successful recovery does not hide the original failed deployment/test step.
+      - name: Restore the previous backend version after deployment or verification failure
+        if: ${{ failure() && (steps.release_prepare.outcome == 'success' || steps.release_prepare.outcome == 'failure') }}
+        run: |
+          python3 scripts/lambda_release.py recover --stage "$API_STAGE" --state "$RELEASE_STATE"
+
       - name: Save browser acceptance evidence
         if: ${{ !cancelled() && (inputs.stage == 'test' || inputs.stage == 'staging') }}
         uses: actions/upload-artifact@v4
@@ -317,3 +318,10 @@ jobs:
           name: browser-acceptance-${{ inputs.stage }}
           path: acceptance-evidence/${{ inputs.stage }}/
           retention-days: 7
+      - name: Save release and recovery evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-release-${{ inputs.stage }}
+          path: release-evidence/
+          retention-days: 30
