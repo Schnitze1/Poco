@@ -55,12 +55,28 @@ jobs:
             amazonlinux:2023 \
             bash -s <<'BUILD'
           set -euo pipefail
-          dnf install -y gcc gcc-c++ make zip unzip openssl-devel git cmake pkgconf perl ca-certificates findutils tar patchelf file
+          dnf install -y gcc gcc-c++ make zip unzip openssl-devel git cmake pkgconf perl ca-certificates findutils tar patchelf file procps-ng
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
           source "$HOME/.cargo/env"
 
           cc -c crates/lambda/glibc_compat.c -o /tmp/glibc_compat.o
-          RUSTFLAGS='-C link-arg=/tmp/glibc_compat.o' cargo build --locked --release -p poco-lambda
+          # The large AWS SDK crates can compile concurrently with PDF dependencies.
+          # Bound concurrent crates and report resource use while release codegen runs.
+          RUSTFLAGS='-C link-arg=/tmp/glibc_compat.o' cargo build --locked --release -p poco-lambda --jobs 2 &
+          BUILD_PID=$!
+          (
+            while kill -0 "$BUILD_PID" 2>/dev/null; do
+              echo "Build progress at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              free -m
+              ps -eo pid,comm,pcpu,rss --sort=-rss | sed -n '1,9p'
+              sleep 30
+            done
+          ) &
+          PROGRESS_PID=$!
+          if wait "$BUILD_PID"; then BUILD_STATUS=0; else BUILD_STATUS=$?; fi
+          kill "$PROGRESS_PID" 2>/dev/null || true
+          wait "$PROGRESS_PID" 2>/dev/null || true
+          if [[ "$BUILD_STATUS" != 0 ]]; then exit "$BUILD_STATUS"; fi
 
           PACKAGE_OUT=target/lambda/poco-lambda
           rm -rf "$PACKAGE_OUT"
